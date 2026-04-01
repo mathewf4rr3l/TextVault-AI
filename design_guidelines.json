@@ -1,0 +1,166 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 5: Jewel & Luxury (Premium Dark Vault)",
+  "colors": {
+    "background": "#0A0A0C",
+    "surface": "rgba(255, 255, 255, 0.04)",
+    "surface_active": "rgba(255, 255, 255, 0.08)",
+    "primary_accent": "#F2A900",
+    "secondary_accent": "#00F0FF",
+    "tertiary_accent": "#9D4CDD",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A0A0AB",
+    "border_subtle": "rgba(255, 255, 255, 0.1)",
+    "border_highlight": "rgba(255, 255, 255, 0.2)",
+    "error": "#FF3B30",
+    "success": "#34C759"
+  },
+  "typography": {
+    "h1": {
+      "fontSize": 40,
+      "fontWeight": "800",
+      "letterSpacing": -1.5,
+      "color": "#FFFFFF"
+    },
+    "h2": {
+      "fontSize": 28,
+      "fontWeight": "700",
+      "letterSpacing": -0.5,
+      "color": "#FFFFFF"
+    },
+    "h3": {
+      "fontSize": 20,
+      "fontWeight": "600",
+      "letterSpacing": 0,
+      "color": "#FFFFFF"
+    },
+    "body": {
+      "fontSize": 16,
+      "fontWeight": "400",
+      "lineHeight": 24,
+      "color": "#A0A0AB"
+    },
+    "body_sm": {
+      "fontSize": 14,
+      "fontWeight": "400",
+      "color": "#A0A0AB"
+    },
+    "label_overline": {
+      "fontSize": 11,
+      "fontWeight": "700",
+      "letterSpacing": 1.5,
+      "textTransform": "uppercase",
+      "color": "#A0A0AB"
+    }
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "2xl": 48,
+    "3xl": 64
+  },
+  "layout_and_surfaces": {
+    "border_radius": {
+      "sm": 8,
+      "md": 16,
+      "lg": 24,
+      "xl": 32,
+      "pill": 9999
+    },
+    "glass_card": {
+      "backgroundColor": "rgba(255, 255, 255, 0.03)",
+      "borderRadius": 24,
+      "borderWidth": 1,
+      "borderColor": "rgba(255, 255, 255, 0.08)",
+      "padding": 24,
+      "shadowColor": "#000000",
+      "shadowOffset": { "width": 0, "height": 8 },
+      "shadowOpacity": 0.5,
+      "shadowRadius": 24,
+      "elevation": 10
+    },
+    "screen_container": {
+      "flex": 1,
+      "backgroundColor": "#0A0A0C",
+      "paddingHorizontal": 24,
+      "paddingTop": 64
+    }
+  },
+  "components": {
+    "pin_pad": {
+      "button": {
+        "width": 72,
+        "height": 72,
+        "borderRadius": 36,
+        "backgroundColor": "rgba(255, 255, 255, 0.05)",
+        "justifyContent": "center",
+        "alignItems": "center"
+      },
+      "indicator_active": {
+        "width": 12,
+        "height": 12,
+        "borderRadius": 6,
+        "backgroundColor": "#F2A900"
+      },
+      "indicator_inactive": {
+        "width": 12,
+        "height": 12,
+        "borderRadius": 6,
+        "backgroundColor": "rgba(255, 255, 255, 0.1)"
+      }
+    },
+    "category_chip": {
+      "container": {
+        "paddingHorizontal": 16,
+        "paddingVertical": 8,
+        "borderRadius": 9999,
+        "borderWidth": 1,
+        "borderColor": "rgba(157, 76, 221, 0.3)",
+        "backgroundColor": "rgba(157, 76, 221, 0.1)"
+      },
+      "text": {
+        "color": "#9D4CDD",
+        "fontSize": 14,
+        "fontWeight": "600"
+      }
+    },
+    "universal_input": {
+      "container": {
+        "backgroundColor": "rgba(255, 255, 255, 0.06)",
+        "borderRadius": 24,
+        "padding": 20,
+        "borderWidth": 1,
+        "borderColor": "rgba(255, 255, 255, 0.12)"
+      },
+      "text_input": {
+        "color": "#FFFFFF",
+        "fontSize": 18,
+        "lineHeight": 28,
+        "minHeight": 120
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "CRITICAL: Build the UI purely with React Native components (`View`, `Text`, `TouchableOpacity`, `TextInput`, `FlatList`) and `StyleSheet.create()`. Do NOT use HTML tags (div, span) or Tailwind classes, as this is an Expo React Native application.",
+    "GLASSMORPHISM: Since standard CSS backdrop-filter is unavailable in raw RN, achieve glassmorphism by using highly translucent RGBA backgrounds (e.g., `rgba(255,255,255,0.03)`) surrounded by a distinct 1px translucent white border (`rgba(255,255,255,0.08)`). If using Expo, utilize `expo-blur` with `intensity={30}` and `tint='dark'` for critical overlapping elements like bottom sheets or sticky headers.",
+    "COLOR ASSIGNMENT: Map the requested accents properly. Gold (#F2A900) for security elements (PIN, Lock/Unlock states). Cyan (#00F0FF) for AI categorization triggers or search highlights. Deep Amethyst (#9D4CDD) for category chips and secondary interactive elements.",
+    "TESTING: Apply the standard `testID=\"kebab-case-name\"` prop to all interactive elements (`TouchableOpacity`, `TextInput`, Buttons) instead of web's `data-testid`.",
+    "ANIMATIONS: Use React Native's standard `LayoutAnimation` or `Animated` API for swipe actions on the Vault List and entering the universal input mode.",
+    "SPACING: Follow the Generous Spacing rule. Cards must have substantial inner padding (minimum 20px). Lists should have at least 16px gap between items."
+  ],
+  "image_urls": [
+    {
+      "category": "onboarding_background",
+      "url": "https://images.unsplash.com/photo-1770745560263-a8fc696de90b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTJ8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRhcmslMjB0ZXh0dXJlfGVufDB8fHx8MTc3NTAwODAxNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract black and white flowing fabric texture used as a subtle background behind the PIN lock screen to break flat darkness."
+    },
+    {
+      "category": "vault_empty_state",
+      "url": "https://images.pexels.com/photos/12651886/pexels-photo-12651886.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Close-up of a vintage safe door used as an elegant empty state image when the vault has no entries."
+    }
+  ]
+}
