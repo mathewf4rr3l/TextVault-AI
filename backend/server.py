@@ -377,7 +377,9 @@ async def export_entries(
     query: Dict[str, Any] = {"is_archived": False}
     if category and category != "All":
         query["category"] = category
-    cursor = db.vault_entries.find(query).sort("created_at", -1)
+    projection = {"_id": 1, "content": 1, "category": 1, "tags": 1, "summary": 1,
+                  "is_favorite": 1, "created_at": 1, "updated_at": 1, "confidence": 1}
+    cursor = db.vault_entries.find(query, projection).sort("created_at", -1)
     docs = await cursor.to_list(10000)
     entries = []
     for doc in docs:
