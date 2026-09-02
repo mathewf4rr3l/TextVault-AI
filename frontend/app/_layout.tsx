@@ -10,6 +10,7 @@ export default function RootLayout() {
         <StatusBar style="light" />
         <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#0A0A0C' } }}>
           <Stack.Screen name="index" />
+          <Stack.Screen name="auth" />
           <Stack.Screen name="lock" />
           <Stack.Screen name="setup-pin" />
           <Stack.Screen name="(vault)" />

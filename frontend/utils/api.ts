@@ -1,5 +1,20 @@
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
+// Module-level auth token
+let _authToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  _authToken = token;
+}
+
+export interface UserType {
+  user_id: string;
+  email: string;
+  name: string;
+  picture?: string;
+  created_at?: string;
+}
+
 export interface VaultEntry {
   id: string;
   content: string;
@@ -23,15 +38,48 @@ export interface Classification {
 }
 
 async function call<T>(path: string, opts?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+  const defaultHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (_authToken) {
+    defaultHeaders['Authorization'] = `Bearer ${_authToken}`;
+  }
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      ...opts,
+      signal: controller.signal,
+      headers: { ...defaultHeaders, ...(opts?.headers as Record<string, string> || {}) },
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  } catch (e) {
+    clearTimeout(timeout);
+    throw e;
+  }
 }
 
 export const api = {
+  // Auth
+  exchangeSession: (sessionId: string) =>
+    call<{ session_token: string; user: UserType }>('/api/auth/session', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+
+  createGuestSession: (deviceId: string) =>
+    call<{ session_token: string; user: UserType }>('/api/auth/guest', {
+      method: 'POST',
+      body: JSON.stringify({ device_id: deviceId }),
+    }),
+
+  getMe: () => call<UserType>('/api/auth/me'),
+
+  logoutUser: () =>
+    call<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
+
+  // Vault entries
   getEntries: (params?: { category?: string; archived?: boolean; favorites?: boolean }) => {
     const q = new URLSearchParams();
     if (params?.category && params.category !== 'All') q.append('category', params.category);
@@ -80,6 +128,7 @@ export const api = {
 
   getStats: () => call<{ total: number; favorites: number }>('/api/stats'),
 
+  // PIN (all require auth token now)
   setupPin: (pin: string) =>
     call<{ success: boolean; message: string }>('/api/pin/setup', {
       method: 'POST',

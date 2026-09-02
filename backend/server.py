@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -7,10 +7,12 @@ import logging
 import re
 import json
 import hashlib
+import httpx
+import uuid
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
@@ -86,12 +88,62 @@ class PinResponse(BaseModel):
     message: str
 
 
-# ==================== HELPERS ====================
+class SessionExchangeRequest(BaseModel):
+    session_id: str
+
+
+class GuestSessionRequest(BaseModel):
+    device_id: str
+
+
+class User(BaseModel):
+    user_id: str
+    email: str
+    name: str = ""
+    picture: str = ""
+    created_at: Optional[str] = None
+
+
+# ==================== AUTH HELPERS ====================
+
+async def get_current_user(request: Request) -> dict:
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = auth_header.split(" ", 1)[1]
+
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    expires_at = session.get("expires_at")
+    if expires_at:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            raise HTTPException(status_code=401, detail="Session expired")
+
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def user_to_dict(user: dict) -> dict:
+    u = dict(user)
+    u.pop("_id", None)
+    if isinstance(u.get("created_at"), datetime):
+        u["created_at"] = u["created_at"].isoformat()
+    return u
+
+
+# ==================== VAULT HELPERS ====================
 
 def doc_to_entry(doc: dict) -> VaultEntry:
     doc = dict(doc)
     doc['id'] = str(doc['_id'])
     doc.pop('_id', None)
+    doc.pop('user_id', None)
     if isinstance(doc.get('created_at'), datetime):
         doc['created_at'] = doc['created_at'].isoformat()
     if isinstance(doc.get('updated_at'), datetime):
@@ -127,40 +179,36 @@ async def ai_classify(content: str) -> ClassificationResult:
     try:
         llm_key = os.environ.get('EMERGENT_LLM_KEY', '')
         if not llm_key:
-            raise ValueError("No LLM key configured")
+            raise ValueError("No LLM key")
 
         chat = LlmChat(
             api_key=llm_key,
             session_id=f"clf-{hashlib.md5(content[:100].encode()).hexdigest()[:8]}",
-            system_message="You are a text classification AI for a secure vault app. Respond ONLY with valid JSON, no markdown or extra text."
+            system_message="You are a text classification AI. Respond ONLY with valid JSON, no markdown."
         ).with_model("anthropic", "claude-haiku-4-5-20251001")
 
-        prompt = f"""Classify this text into ONE of these categories: Notes, URL, PhoneNumber, Email, Date, Address, Financial, ID, Custom
+        prompt = f"""Classify this text. Categories: Notes, URL, PhoneNumber, Email, Date, Address, Financial, ID, Custom
 
 Text: "{content[:500]}"
 
-Respond ONLY with JSON (no markdown):
-{{"category": "Notes", "tags": ["tag1", "tag2"], "confidence": 0.9, "metadata": {{}}, "summary": "brief one-sentence description"}}"""
+Respond ONLY with JSON:
+{{"category": "Notes", "tags": ["tag1"], "confidence": 0.9, "metadata": {{}}, "summary": "brief description"}}"""
 
         response = await chat.send_message(UserMessage(text=prompt))
-        # Extract JSON: find outermost { ... }
         start = response.find('{')
         end = response.rfind('}') + 1
-        json_match = None
         if start >= 0 and end > start:
             try:
                 result = json.loads(response[start:end])
-                json_match = True
+                return ClassificationResult(
+                    category=result.get('category', regex_cat or 'Notes'),
+                    tags=result.get('tags', [])[:5],
+                    confidence=float(result.get('confidence', 0.85)),
+                    metadata=result.get('metadata', {}),
+                    summary=result.get('summary'),
+                )
             except json.JSONDecodeError:
-                json_match = None
-        if json_match:
-            return ClassificationResult(
-                category=result.get('category', regex_cat or 'Notes'),
-                tags=result.get('tags', [])[:5],
-                confidence=float(result.get('confidence', 0.85)),
-                metadata=result.get('metadata', {}),
-                summary=result.get('summary'),
-            )
+                pass
     except Exception as e:
         logger.warning(f"AI classification failed: {e}")
 
@@ -173,21 +221,135 @@ Respond ONLY with JSON (no markdown):
     )
 
 
-# ==================== ROUTES ====================
+# ==================== AUTH ROUTES ====================
+
+@api_router.post("/auth/session")
+async def exchange_session(body: SessionExchangeRequest):
+    try:
+        async with httpx.AsyncClient() as hclient:
+            response = await hclient.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": body.session_id},
+                timeout=15.0,
+            )
+        if response.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid session")
+
+        data = response.json()
+        email = data.get("email")
+        name = data.get("name", "")
+        picture = data.get("picture", "")
+        session_token = data.get("session_token")
+
+        if not email or not session_token:
+            raise HTTPException(status_code=401, detail="Invalid session data")
+
+        # Upsert user by email
+        existing = await db.users.find_one({"email": email}, {"_id": 0})
+        if existing:
+            user_id = existing["user_id"]
+            await db.users.update_one(
+                {"email": email},
+                {"$set": {"name": name, "picture": picture}}
+            )
+        else:
+            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            await db.users.insert_one({
+                "user_id": user_id,
+                "email": email,
+                "name": name,
+                "picture": picture,
+                "created_at": datetime.now(timezone.utc),
+            })
+
+        # Store session
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        await db.user_sessions.insert_one({
+            "session_token": session_token,
+            "user_id": user_id,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc),
+        })
+
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        return {"session_token": session_token, "user": user_to_dict(user)}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Session exchange error: {e}")
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+
+@api_router.post("/auth/guest")
+async def create_guest_session(body: GuestSessionRequest):
+    """Create or retrieve an anonymous guest session tied to a device ID."""
+    try:
+        # Derive a stable user_id from the device_id
+        device_hash = hashlib.sha256(body.device_id[:128].encode()).hexdigest()[:16]
+        user_id = f"guest_{device_hash}"
+        guest_email = f"guest_{device_hash}@local.textvault"
+
+        # Upsert the guest user (create only if not exists)
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$setOnInsert": {
+                "user_id": user_id,
+                "email": guest_email,
+                "name": "Guest",
+                "picture": "",
+                "is_guest": True,
+                "created_at": datetime.now(timezone.utc),
+            }},
+            upsert=True,
+        )
+
+        # Create new session
+        session_token = f"guest_{uuid.uuid4().hex}"
+        expires_at = datetime.now(timezone.utc) + timedelta(days=365)
+        await db.user_sessions.insert_one({
+            "session_token": session_token,
+            "user_id": user_id,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc),
+        })
+
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        return {"session_token": session_token, "user": user_to_dict(user)}
+
+    except Exception as e:
+        logger.error(f"Guest session error: {e}")
+        raise HTTPException(status_code=500, detail="Could not create guest session")
+
+
+@api_router.get("/auth/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return user_to_dict(current_user)
+
+
+@api_router.post("/auth/logout")
+async def logout_user(request: Request):
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1]
+        await db.user_sessions.delete_one({"session_token": token})
+    return {"success": True}
+
+
+# ==================== AI ROUTES ====================
 
 @api_router.get("/health")
 async def health():
     return {"status": "ok", "service": "TextVault AI"}
 
 
-# AI Endpoints
 @api_router.post("/ai/classify", response_model=ClassificationResult)
-async def classify_endpoint(req: ClassifyRequest):
+async def classify_endpoint(req: ClassifyRequest, current_user: dict = Depends(get_current_user)):
     return await ai_classify(req.content)
 
 
 @api_router.post("/ai/summarize")
-async def summarize_endpoint(req: ClassifyRequest):
+async def summarize_endpoint(req: ClassifyRequest, current_user: dict = Depends(get_current_user)):
     try:
         llm_key = os.environ.get('EMERGENT_LLM_KEY', '')
         chat = LlmChat(
@@ -195,21 +357,22 @@ async def summarize_endpoint(req: ClassifyRequest):
             session_id=f"sum-{hashlib.md5(req.content[:100].encode()).hexdigest()[:8]}",
             system_message="You are a concise summarizer."
         ).with_model("anthropic", "claude-haiku-4-5-20251001")
-        response = await chat.send_message(
-            UserMessage(text=f"Summarize in 1-2 sentences:\n{req.content[:1500]}")
-        )
+        response = await chat.send_message(UserMessage(
+            text=f"Summarize in 1-2 sentences:\n{req.content[:1500]}"
+        ))
         return {"summary": response.strip()}
     except Exception as e:
-        logger.error(f"Summarize error: {e}")
         return {"summary": None}
 
 
-# Entries CRUD
+# ==================== VAULT ENTRIES ====================
+
 @api_router.post("/entries", response_model=VaultEntry)
-async def create_entry(entry: VaultEntryCreate):
+async def create_entry(entry: VaultEntryCreate, current_user: dict = Depends(get_current_user)):
     classification = await ai_classify(entry.content)
     now = datetime.now(timezone.utc)
     doc = {
+        "user_id": current_user["user_id"],
         "content": entry.content,
         "category": entry.category or classification.category,
         "tags": entry.tags if entry.tags is not None else classification.tags,
@@ -224,6 +387,7 @@ async def create_entry(entry: VaultEntryCreate):
     result = await db.vault_entries.insert_one(doc)
     doc['id'] = str(result.inserted_id)
     doc.pop('_id', None)
+    doc.pop('user_id', None)
     doc['created_at'] = now.isoformat()
     doc['updated_at'] = now.isoformat()
     return VaultEntry(**doc)
@@ -236,8 +400,9 @@ async def list_entries(
     favorites: bool = Query(False),
     limit: int = Query(100),
     skip: int = Query(0),
+    current_user: dict = Depends(get_current_user),
 ):
-    query: Dict[str, Any] = {"is_archived": archived}
+    query: Dict[str, Any] = {"user_id": current_user["user_id"], "is_archived": archived}
     if category and category != "All":
         query["category"] = category
     if favorites:
@@ -248,8 +413,8 @@ async def list_entries(
 
 
 @api_router.post("/entries/search", response_model=List[VaultEntry])
-async def search_entries(req: SearchRequest):
-    query: Dict[str, Any] = {"is_archived": False}
+async def search_entries(req: SearchRequest, current_user: dict = Depends(get_current_user)):
+    query: Dict[str, Any] = {"user_id": current_user["user_id"], "is_archived": False}
     if req.category and req.category != "All":
         query["category"] = req.category
     if req.query.strip():
@@ -264,9 +429,11 @@ async def search_entries(req: SearchRequest):
 
 
 @api_router.get("/entries/{entry_id}", response_model=VaultEntry)
-async def get_entry(entry_id: str):
+async def get_entry(entry_id: str, current_user: dict = Depends(get_current_user)):
     try:
-        doc = await db.vault_entries.find_one({"_id": ObjectId(entry_id)})
+        doc = await db.vault_entries.find_one(
+            {"_id": ObjectId(entry_id), "user_id": current_user["user_id"]}
+        )
     except Exception:
         raise HTTPException(400, "Invalid entry ID")
     if not doc:
@@ -275,23 +442,17 @@ async def get_entry(entry_id: str):
 
 
 @api_router.put("/entries/{entry_id}", response_model=VaultEntry)
-async def update_entry(entry_id: str, update: VaultEntryUpdate):
+async def update_entry(entry_id: str, update: VaultEntryUpdate, current_user: dict = Depends(get_current_user)):
     update_dict: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
-    if update.content is not None:
-        update_dict["content"] = update.content
-    if update.category is not None:
-        update_dict["category"] = update.category
-    if update.tags is not None:
-        update_dict["tags"] = update.tags
-    if update.summary is not None:
-        update_dict["summary"] = update.summary
-    if update.is_favorite is not None:
-        update_dict["is_favorite"] = update.is_favorite
-    if update.is_archived is not None:
-        update_dict["is_archived"] = update.is_archived
+    if update.content is not None: update_dict["content"] = update.content
+    if update.category is not None: update_dict["category"] = update.category
+    if update.tags is not None: update_dict["tags"] = update.tags
+    if update.summary is not None: update_dict["summary"] = update.summary
+    if update.is_favorite is not None: update_dict["is_favorite"] = update.is_favorite
+    if update.is_archived is not None: update_dict["is_archived"] = update.is_archived
     try:
         doc = await db.vault_entries.find_one_and_update(
-            {"_id": ObjectId(entry_id)},
+            {"_id": ObjectId(entry_id), "user_id": current_user["user_id"]},
             {"$set": update_dict},
             return_document=True,
         )
@@ -303,9 +464,11 @@ async def update_entry(entry_id: str, update: VaultEntryUpdate):
 
 
 @api_router.delete("/entries/{entry_id}")
-async def delete_entry(entry_id: str):
+async def delete_entry(entry_id: str, current_user: dict = Depends(get_current_user)):
     try:
-        result = await db.vault_entries.delete_one({"_id": ObjectId(entry_id)})
+        result = await db.vault_entries.delete_one(
+            {"_id": ObjectId(entry_id), "user_id": current_user["user_id"]}
+        )
     except Exception:
         raise HTTPException(400, "Invalid entry ID")
     if result.deleted_count == 0:
@@ -314,9 +477,9 @@ async def delete_entry(entry_id: str):
 
 
 @api_router.get("/categories/stats")
-async def category_stats():
+async def category_stats(current_user: dict = Depends(get_current_user)):
     pipeline = [
-        {"$match": {"is_archived": False}},
+        {"$match": {"user_id": current_user["user_id"], "is_archived": False}},
         {"$group": {"_id": "$category", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
     ]
@@ -325,30 +488,32 @@ async def category_stats():
 
 
 @api_router.get("/stats")
-async def get_stats():
-    total = await db.vault_entries.count_documents({"is_archived": False})
-    favorites = await db.vault_entries.count_documents({"is_favorite": True, "is_archived": False})
+async def get_stats(current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    total = await db.vault_entries.count_documents({"user_id": uid, "is_archived": False})
+    favorites = await db.vault_entries.count_documents({"user_id": uid, "is_favorite": True, "is_archived": False})
     return {"total": total, "favorites": favorites}
 
 
-# PIN Management
+# ==================== PIN ====================
+
 @api_router.post("/pin/setup", response_model=PinResponse)
-async def setup_pin(req: PinRequest):
+async def setup_pin(req: PinRequest, current_user: dict = Depends(get_current_user)):
     if len(req.pin) < 4:
         raise HTTPException(400, "PIN must be at least 4 digits")
     pin_hash = hashlib.sha256(req.pin.encode()).hexdigest()
     await db.settings.update_one(
-        {"key": "pin"},
-        {"$set": {"key": "pin", "value": pin_hash, "updated_at": datetime.now(timezone.utc)}},
+        {"key": "pin", "user_id": current_user["user_id"]},
+        {"$set": {"key": "pin", "user_id": current_user["user_id"], "value": pin_hash, "updated_at": datetime.now(timezone.utc)}},
         upsert=True,
     )
     return PinResponse(success=True, message="PIN set successfully")
 
 
 @api_router.post("/pin/verify", response_model=PinResponse)
-async def verify_pin(req: PinRequest):
+async def verify_pin(req: PinRequest, current_user: dict = Depends(get_current_user)):
     pin_hash = hashlib.sha256(req.pin.encode()).hexdigest()
-    stored = await db.settings.find_one({"key": "pin"})
+    stored = await db.settings.find_one({"key": "pin", "user_id": current_user["user_id"]})
     if not stored:
         return PinResponse(success=True, message="No PIN set")
     if stored["value"] == pin_hash:
@@ -357,24 +522,26 @@ async def verify_pin(req: PinRequest):
 
 
 @api_router.get("/pin/status")
-async def pin_status():
-    stored = await db.settings.find_one({"key": "pin"})
+async def pin_status(current_user: dict = Depends(get_current_user)):
+    stored = await db.settings.find_one({"key": "pin", "user_id": current_user["user_id"]})
     return {"hasPin": bool(stored)}
 
 
 @api_router.delete("/pin/reset")
-async def reset_pin():
-    await db.settings.delete_one({"key": "pin"})
+async def reset_pin(current_user: dict = Depends(get_current_user)):
+    await db.settings.delete_one({"key": "pin", "user_id": current_user["user_id"]})
     return {"success": True}
 
 
-# Export
+# ==================== EXPORT ====================
+
 @api_router.get("/export")
 async def export_entries(
     format: str = Query("json"),
     category: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
-    query: Dict[str, Any] = {"is_archived": False}
+    query: Dict[str, Any] = {"user_id": current_user["user_id"], "is_archived": False}
     if category and category != "All":
         query["category"] = category
     projection = {"_id": 1, "content": 1, "category": 1, "tags": 1, "summary": 1,
@@ -404,7 +571,8 @@ async def export_entries(
     return {"data": entries, "format": "json", "count": len(entries)}
 
 
-# Include router
+# ==================== APP SETUP ====================
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -414,6 +582,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("user_id", unique=True)
+        await db.user_sessions.create_index("session_token", unique=True)
+        await db.user_sessions.create_index("user_id")
+        await db.user_sessions.create_index([("expires_at", 1)], expireAfterSeconds=0)
+        await db.vault_entries.create_index([("user_id", 1), ("created_at", -1)])
+        logger.info("DB indexes created")
+    except Exception as e:
+        logger.warning(f"Index creation warning: {e}")
 
 
 @app.on_event("shutdown")

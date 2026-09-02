@@ -59,13 +59,40 @@ export default function SettingsScreen() {
   const [exporting, setExporting] = useState(false);
   const [stats, setStats] = useState({ total: 0, favorites: 0 });
   const router = useRouter();
-  const { setUnlocked } = useApp();
+  const { setUnlocked, user, logout } = useApp();
 
   useFocusEffect(
     useCallback(() => {
       api.getStats().then(setStats).catch(() => {});
     }, [])
   );
+
+  const isGuest = !user?.email || user.email.startsWith('guest_');
+
+  const handleLogout = () => {
+    Alert.alert(
+      isGuest ? 'Clear Session' : 'Sign Out',
+      isGuest
+        ? 'This will clear your local session. Your vault data will remain.'
+        : 'You will be signed out of your Google account.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: isGuest ? 'Clear' : 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+              try { await SecureStore.deleteItemAsync('vault_pin'); } catch {}
+              router.replace('/auth');
+            } catch {
+              Alert.alert('Error', 'Could not sign out.');
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const handleExport = async (format: 'json' | 'txt') => {
     setExporting(true);
@@ -191,6 +218,32 @@ export default function SettingsScreen() {
             subtitle="Lock immediately"
             onPress={handleLock}
             testID="lock-now-btn"
+          />
+        </Section>
+
+        <Section title="Account">
+          {isGuest ? (
+            <SettingRow
+              icon="👤"
+              label="Guest Mode"
+              subtitle="Sign in with Google to sync across devices"
+              onPress={() => router.replace('/auth')}
+              testID="connect-google-btn"
+            />
+          ) : (
+            <SettingRow
+              icon="👤"
+              label={user?.name || 'Google Account'}
+              subtitle={user?.email || ''}
+            />
+          )}
+          <SettingRow
+            icon="🚪"
+            label={isGuest ? 'Clear Session' : 'Sign Out'}
+            subtitle={isGuest ? 'Clear local vault session' : 'Sign out of Google'}
+            onPress={handleLogout}
+            danger
+            testID="logout-btn"
           />
         </Section>
 
