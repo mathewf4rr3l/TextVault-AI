@@ -9,6 +9,9 @@ import json
 import hashlib
 import httpx
 import uuid
+import time
+import secrets
+from collections import defaultdict
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -30,6 +33,60 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ==================== RATE LIMITING ====================
+
+class RateLimiter:
+    """Simple in-memory sliding-window rate limiter."""
+
+    def __init__(self, max_calls: int, window_seconds: int):
+        self.max_calls = max_calls
+        self.window_seconds = window_seconds
+        self._calls: Dict[str, List[float]] = defaultdict(list)
+
+    def is_allowed(self, key: str) -> bool:
+        now = time.time()
+        window_start = now - self.window_seconds
+        calls = self._calls[key]
+        # Purge expired entries
+        self._calls[key] = [t for t in calls if t > window_start]
+        if len(self._calls[key]) >= self.max_calls:
+            return False
+        self._calls[key].append(now)
+        return True
+
+
+# 5 guest session requests per IP per minute
+guest_rate_limiter = RateLimiter(max_calls=5, window_seconds=60)
+# 10 PIN verify attempts per user per 5 minutes
+pin_verify_rate_limiter = RateLimiter(max_calls=10, window_seconds=300)
+# 5 session exchanges per IP per minute (Google auth)
+auth_session_rate_limiter = RateLimiter(max_calls=5, window_seconds=60)
+
+
+# ==================== PIN HASHING HELPERS ====================
+
+PBKDF2_ITERATIONS = 260_000  # NIST recommendation 2024
+
+def _hash_pin_pbkdf2(pin: str, salt_hex: Optional[str] = None) -> tuple:
+    """Return (hash_hex, salt_hex) using PBKDF2-HMAC-SHA256."""
+    salt = bytes.fromhex(salt_hex) if salt_hex else secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, PBKDF2_ITERATIONS)
+    return dk.hex(), salt.hex()
+
+
+def _verify_pin(pin: str, stored_doc: dict) -> bool:
+    """Verify PIN against stored document; handles both PBKDF2 and legacy SHA-256."""
+    hash_type = stored_doc.get("hash_type", "sha256")
+    stored_hash = stored_doc.get("value", "")
+    if hash_type == "pbkdf2":
+        salt_hex = stored_doc.get("salt", "")
+        dk = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt_hex), PBKDF2_ITERATIONS)
+        return secrets.compare_digest(dk.hex(), stored_hash)
+    # Legacy SHA-256 (unsalted) — constant-time compare
+    legacy = hashlib.sha256(pin.encode()).hexdigest()
+    return secrets.compare_digest(legacy, stored_hash)
+
+
 # ==================== MODELS ====================
 
 class VaultEntry(BaseModel):
@@ -47,16 +104,16 @@ class VaultEntry(BaseModel):
 
 
 class VaultEntryCreate(BaseModel):
-    content: str
-    category: Optional[str] = None
+    content: str = Field(..., min_length=1, max_length=10000)
+    category: Optional[str] = Field(None, max_length=50)
     tags: Optional[List[str]] = None
 
 
 class VaultEntryUpdate(BaseModel):
-    content: Optional[str] = None
-    category: Optional[str] = None
+    content: Optional[str] = Field(None, max_length=10000)
+    category: Optional[str] = Field(None, max_length=50)
     tags: Optional[List[str]] = None
-    summary: Optional[str] = None
+    summary: Optional[str] = Field(None, max_length=500)
     is_favorite: Optional[bool] = None
     is_archived: Optional[bool] = None
 
@@ -74,9 +131,9 @@ class ClassificationResult(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    query: str
-    category: Optional[str] = None
-    limit: int = 20
+    query: str = Field(..., max_length=200)
+    category: Optional[str] = Field(None, max_length=50)
+    limit: int = Field(default=20, ge=1, le=100)
 
 
 class PinRequest(BaseModel):
@@ -93,7 +150,7 @@ class SessionExchangeRequest(BaseModel):
 
 
 class GuestSessionRequest(BaseModel):
-    device_id: str
+    device_id: str = Field(..., min_length=8, max_length=256)
 
 
 class User(BaseModel):
@@ -224,7 +281,10 @@ Respond ONLY with JSON:
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/session")
-async def exchange_session(body: SessionExchangeRequest):
+async def exchange_session(body: SessionExchangeRequest, request: Request):
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
+    if not auth_session_rate_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Too many authentication requests.")
     try:
         async with httpx.AsyncClient() as hclient:
             response = await hclient.get(
@@ -282,8 +342,11 @@ async def exchange_session(body: SessionExchangeRequest):
 
 
 @api_router.post("/auth/guest")
-async def create_guest_session(body: GuestSessionRequest):
+async def create_guest_session(body: GuestSessionRequest, request: Request):
     """Create or retrieve an anonymous guest session tied to a device ID."""
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
+    if not guest_rate_limiter.is_allowed(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait before trying again.")
     try:
         # Derive a stable user_id from the device_id
         device_hash = hashlib.sha256(body.device_id[:128].encode()).hexdigest()[:16]
@@ -304,9 +367,9 @@ async def create_guest_session(body: GuestSessionRequest):
             upsert=True,
         )
 
-        # Create new session
+        # Create new session — 30-day expiry for guest (down from 365)
         session_token = f"guest_{uuid.uuid4().hex}"
-        expires_at = datetime.now(timezone.utc) + timedelta(days=365)
+        expires_at = datetime.now(timezone.utc) + timedelta(days=30)
         await db.user_sessions.insert_one({
             "session_token": session_token,
             "user_id": user_id,
@@ -317,6 +380,8 @@ async def create_guest_session(body: GuestSessionRequest):
         user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
         return {"session_token": session_token, "user": user_to_dict(user)}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Guest session error: {e}")
         raise HTTPException(status_code=500, detail="Could not create guest session")
@@ -398,8 +463,8 @@ async def list_entries(
     category: Optional[str] = Query(None),
     archived: bool = Query(False),
     favorites: bool = Query(False),
-    limit: int = Query(100),
-    skip: int = Query(0),
+    limit: int = Query(100, ge=1, le=200),
+    skip: int = Query(0, ge=0, le=10000),
     current_user: dict = Depends(get_current_user),
 ):
     query: Dict[str, Any] = {"user_id": current_user["user_id"], "is_archived": archived}
@@ -418,13 +483,16 @@ async def search_entries(req: SearchRequest, current_user: dict = Depends(get_cu
     if req.category and req.category != "All":
         query["category"] = req.category
     if req.query.strip():
+        # Escape user input before using as regex to prevent ReDoS
+        escaped = re.escape(req.query.strip())
         query["$or"] = [
-            {"content": {"$regex": req.query, "$options": "i"}},
-            {"tags": {"$elemMatch": {"$regex": req.query, "$options": "i"}}},
-            {"summary": {"$regex": req.query, "$options": "i"}},
+            {"content": {"$regex": escaped, "$options": "i"}},
+            {"tags": {"$elemMatch": {"$regex": escaped, "$options": "i"}}},
+            {"summary": {"$regex": escaped, "$options": "i"}},
         ]
-    cursor = db.vault_entries.find(query).sort("created_at", -1).limit(req.limit)
-    docs = await cursor.to_list(req.limit)
+    limit = min(req.limit, 100)
+    cursor = db.vault_entries.find(query).sort("created_at", -1).limit(limit)
+    docs = await cursor.to_list(limit)
     return [doc_to_entry(d) for d in docs]
 
 
@@ -499,12 +567,20 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/pin/setup", response_model=PinResponse)
 async def setup_pin(req: PinRequest, current_user: dict = Depends(get_current_user)):
-    if len(req.pin) < 4:
-        raise HTTPException(400, "PIN must be at least 4 digits")
-    pin_hash = hashlib.sha256(req.pin.encode()).hexdigest()
+    if len(req.pin) < 4 or not req.pin.isdigit():
+        raise HTTPException(400, "PIN must be at least 4 digits (numeric only)")
+    # Use PBKDF2 with a random salt
+    pin_hash, salt_hex = _hash_pin_pbkdf2(req.pin)
     await db.settings.update_one(
         {"key": "pin", "user_id": current_user["user_id"]},
-        {"$set": {"key": "pin", "user_id": current_user["user_id"], "value": pin_hash, "updated_at": datetime.now(timezone.utc)}},
+        {"$set": {
+            "key": "pin",
+            "user_id": current_user["user_id"],
+            "value": pin_hash,
+            "salt": salt_hex,
+            "hash_type": "pbkdf2",
+            "updated_at": datetime.now(timezone.utc),
+        }},
         upsert=True,
     )
     return PinResponse(success=True, message="PIN set successfully")
@@ -512,12 +588,27 @@ async def setup_pin(req: PinRequest, current_user: dict = Depends(get_current_us
 
 @api_router.post("/pin/verify", response_model=PinResponse)
 async def verify_pin(req: PinRequest, current_user: dict = Depends(get_current_user)):
-    pin_hash = hashlib.sha256(req.pin.encode()).hexdigest()
-    stored = await db.settings.find_one({"key": "pin", "user_id": current_user["user_id"]})
+    user_id = current_user["user_id"]
+
+    # Rate-limit PIN attempts per user
+    if not pin_verify_rate_limiter.is_allowed(user_id):
+        raise HTTPException(status_code=429, detail="Too many PIN attempts. Please wait before trying again.")
+
+    stored = await db.settings.find_one({"key": "pin", "user_id": user_id})
     if not stored:
-        return PinResponse(success=True, message="No PIN set")
-    if stored["value"] == pin_hash:
+        # No PIN configured — treat as unverified (do not silently succeed)
+        return PinResponse(success=False, message="No PIN configured")
+
+    if _verify_pin(req.pin, stored):
+        # Migrate legacy SHA-256 hash to PBKDF2 on successful verify
+        if stored.get("hash_type", "sha256") == "sha256":
+            new_hash, salt_hex = _hash_pin_pbkdf2(req.pin)
+            await db.settings.update_one(
+                {"key": "pin", "user_id": user_id},
+                {"$set": {"value": new_hash, "salt": salt_hex, "hash_type": "pbkdf2", "updated_at": datetime.now(timezone.utc)}}
+            )
         return PinResponse(success=True, message="PIN verified")
+
     return PinResponse(success=False, message="Incorrect PIN")
 
 
@@ -547,7 +638,7 @@ async def export_entries(
     projection = {"_id": 1, "content": 1, "category": 1, "tags": 1, "summary": 1,
                   "is_favorite": 1, "created_at": 1, "updated_at": 1, "confidence": 1}
     cursor = db.vault_entries.find(query, projection).sort("created_at", -1)
-    docs = await cursor.to_list(10000)
+    docs = await cursor.to_list(1000)  # Cap at 1000 for export
     entries = []
     for doc in docs:
         doc.pop('_id', None)
@@ -575,12 +666,20 @@ async def export_entries(
 
 app.include_router(api_router)
 
+# Restrict CORS to known origins only
+_ALLOWED_ORIGINS = [
+    os.environ.get("FRONTEND_URL", "https://textvault-ai.preview.emergentagent.com"),
+    "http://localhost:3000",
+    "http://localhost:8001",
+    "http://127.0.0.1:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 

@@ -159,6 +159,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     try { await api.logoutUser(); } catch {}
     await removeStoredToken();
+    // Clear guest device ID — prevents re-minting the same guest session after logout
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      try { localStorage.removeItem('textvault_device_id'); } catch {}
+    } else {
+      try { await SecureStore.deleteItemAsync('textvault_device_id'); } catch {}
+    }
     setAuthToken(null);
     setUser(null);
     setSessionToken(null);
