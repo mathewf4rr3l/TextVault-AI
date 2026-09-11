@@ -419,10 +419,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.cyan,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: COLORS.cyan,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
+    boxShadow: '0px 4px 12px rgba(0,255,255,0.5)',
     elevation: 10,
   },
   emptyState: {

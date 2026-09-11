@@ -14,7 +14,7 @@ export default function SearchScreen() {
   const [results, setResults] = useState<VaultEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const router = useRouter();
 
   useFocusEffect(

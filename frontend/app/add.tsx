@@ -18,7 +18,7 @@ export default function AddScreen() {
   const [saving, setSaving] = useState(false);
   const [showCatPicker, setShowCatPicker] = useState(false);
   const [overrideCategory, setOverrideCategory] = useState<string | null>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const router = useRouter();
 
   useEffect(() => {

@@ -37,9 +37,6 @@ export const GLASS = {
   borderRadius: 20,
   borderWidth: 1,
   borderColor: 'rgba(255, 255, 255, 0.08)',
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 4 },
-  shadowOpacity: 0.4,
-  shadowRadius: 12,
+  boxShadow: '0px 4px 12px rgba(0,0,0,0.4)',
   elevation: 6,
 };
