@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Pressable,
-  Share, Platform, Alert, TextInput,
+  Share, Platform, Alert, TextInput, Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { api, Prompt, Review, formatCount, timeAgo } from '../../utils/api';
+import { api, Prompt, Review, Folder, formatCount, timeAgo } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
 import DifficultyBadge from '../../src/components/DifficultyBadge';
@@ -25,6 +26,34 @@ export default function PromptDetail() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [reviewText, setReviewText] = useState('');
   const [savingRating, setSavingRating] = useState(false);
+  const [showSave, setShowSave] = useState(false);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [newFolder, setNewFolder] = useState('');
+  const [savedMsg, setSavedMsg] = useState('');
+
+  const openSave = async () => {
+    setShowSave(true);
+    try { setFolders(await api.getFolders()); } catch {}
+  };
+
+  const saveToFolder = async (folderId: string, name: string) => {
+    if (!prompt) return;
+    try {
+      await api.addToFolder(folderId, prompt.id);
+      setShowSave(false);
+      setSavedMsg(`Saved to "${name}"`);
+      setTimeout(() => setSavedMsg(''), 2500);
+    } catch {}
+  };
+
+  const createAndSave = async () => {
+    if (!newFolder.trim() || !prompt) return;
+    try {
+      const f = await api.createFolder(newFolder.trim());
+      setNewFolder('');
+      await saveToFolder(f.id, f.name);
+    } catch {}
+  };
 
   const toggleHelpful = async (rid?: string) => {
     if (!rid) return;
@@ -141,11 +170,12 @@ export default function PromptDetail() {
         <View style={styles.catBadge}><Text style={styles.catText}>{prompt.category}</Text></View>
         <Text style={styles.title}>{prompt.title}</Text>
 
-        <View style={styles.authorRow}>
+        <Pressable style={styles.authorRow} onPress={() => router.push(`/user/${prompt.author_id}` as any)}>
           <Text style={styles.author}>by {prompt.author_name}</Text>
           <Text style={styles.dot}>·</Text>
           <Text style={styles.time}>{timeAgo(prompt.created_at)}</Text>
-        </View>
+          <Ionicons name="chevron-forward" size={13} color={COLORS.textMuted} />
+        </Pressable>
 
         <View style={styles.metaRow}>
           <DifficultyBadge level={prompt.difficulty} />
@@ -215,24 +245,62 @@ export default function PromptDetail() {
       </ScrollView>
 
       {/* Sticky action bar */}
-      {streakMsg ? (
+      {streakMsg || savedMsg ? (
         <View style={[styles.streakToast, { bottom: insets.bottom + 84 }]}>
-          <Text style={styles.streakToastText}>{streakMsg}</Text>
+          <Text style={styles.streakToastText}>{streakMsg || savedMsg}</Text>
         </View>
       ) : null}
       <View style={[styles.actionBar, { paddingBottom: insets.bottom + 10 }]}>
         <Pressable style={styles.iconBtn} onPress={onLike} testID="detail-like-btn">
-          <Text style={styles.iconEmoji}>{prompt.is_liked ? '❤️' : '🤍'}</Text>
+          <Ionicons name={prompt.is_liked ? 'heart' : 'heart-outline'} size={22} color={prompt.is_liked ? COLORS.error : COLORS.textSecondary} />
           <Text style={styles.iconCount}>{formatCount(prompt.likes)}</Text>
         </Pressable>
         <Pressable style={styles.iconBtn} onPress={onShare} testID="detail-share-btn">
-          <Text style={styles.iconEmoji}>↗️</Text>
+          <Ionicons name="share-social-outline" size={22} color={COLORS.textSecondary} />
           <Text style={styles.iconCount}>{formatCount(prompt.shares)}</Text>
         </Pressable>
+        <Pressable style={styles.iconBtn} onPress={openSave} testID="detail-save-btn">
+          <Ionicons name="bookmark-outline" size={22} color={COLORS.textSecondary} />
+          <Text style={styles.iconCount}>Save</Text>
+        </Pressable>
         <TouchableOpacity style={styles.copyBtn} onPress={onCopy} testID="detail-copy-btn">
-          <Text style={styles.copyBtnText}>{copied ? '✓ Copied!' : '📋 Copy Prompt'}</Text>
+          <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={18} color="#2A1400" />
+          <Text style={styles.copyBtnText}>{copied ? 'Copied!' : 'Copy'}</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Save-to-folder modal */}
+      <Modal visible={showSave} transparent animationType="slide" onRequestClose={() => setShowSave(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowSave(false)} />
+        <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 20 }]}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Save to folder</Text>
+          <View style={styles.createRow}>
+            <TextInput
+              style={styles.folderInput}
+              placeholder="New folder name…"
+              placeholderTextColor={COLORS.textMuted}
+              value={newFolder}
+              onChangeText={setNewFolder}
+              maxLength={60}
+            />
+            <TouchableOpacity style={styles.createBtn} onPress={createAndSave} disabled={!newFolder.trim()}>
+              <Ionicons name="add" size={22} color="#2A1400" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={{ maxHeight: 280 }}>
+            {folders.length === 0 ? (
+              <Text style={styles.noFolders}>No folders yet. Create one above.</Text>
+            ) : folders.map((f) => (
+              <TouchableOpacity key={f.id} style={styles.folderRow} onPress={() => saveToFolder(f.id, f.name)}>
+                <Ionicons name="folder-outline" size={20} color={COLORS.purpleLight} />
+                <Text style={styles.folderName}>{f.name}</Text>
+                <Text style={styles.folderCount}>{f.count}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }

@@ -1,21 +1,16 @@
 import { Tabs } from 'expo-router';
-import { Text, Platform } from 'react-native';
+import { Platform } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../constants/theme';
 
-const ICONS: Record<string, string> = {
-  discover: '✨',
-  browse: '🗂️',
-  collections: '⭐',
-  search: '🔍',
-  library: '📚',
-  profile: '⚔️',
+const ICONS: Record<string, { on: keyof typeof Ionicons.glyphMap; off: keyof typeof Ionicons.glyphMap }> = {
+  discover: { on: 'sparkles', off: 'sparkles-outline' },
+  browse: { on: 'grid', off: 'grid-outline' },
+  collections: { on: 'albums', off: 'albums-outline' },
+  search: { on: 'search', off: 'search-outline' },
+  library: { on: 'library', off: 'library-outline' },
+  profile: { on: 'person-circle', off: 'person-circle-outline' },
 };
-
-function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  return (
-    <Text style={{ fontSize: 22, opacity: focused ? 1 : 0.5 }}>{ICONS[name]}</Text>
-  );
-}
 
 export default function TabsLayout() {
   return (
@@ -28,12 +23,15 @@ export default function TabsLayout() {
           backgroundColor: COLORS.tabBar,
           borderTopColor: COLORS.border,
           borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 86 : 64,
-          paddingTop: 6,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 8,
+          height: Platform.OS === 'ios' ? 88 : 66,
+          paddingTop: 8,
+          paddingBottom: Platform.OS === 'ios' ? 30 : 10,
         },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700' },
-        tabBarIcon: ({ focused }) => <TabIcon name={route.name} focused={focused} />,
+        tabBarLabelStyle: { fontSize: 10.5, fontWeight: '700' },
+        tabBarIcon: ({ focused, color }) => {
+          const set = ICONS[route.name] || ICONS.discover;
+          return <Ionicons name={focused ? set.on : set.off} size={23} color={color} />;
+        },
       })}
     >
       <Tabs.Screen name="discover" options={{ title: 'Discover' }} />

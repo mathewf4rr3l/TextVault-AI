@@ -14,6 +14,8 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="prompt/[id]" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="collection/[id]" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="user/[id]" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="folder/[id]" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="leaderboard" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="submit" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />
           <Stack.Screen name="upgrade" options={{ presentation: 'modal', animation: 'slide_from_bottom' }} />

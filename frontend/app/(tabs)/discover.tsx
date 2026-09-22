@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator,
-  Pressable, TouchableOpacity, Image,
+  Pressable, TouchableOpacity, Image, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { Platform } from 'react-native';
 import { api, Prompt, CollectionPreview, StreakStatus, WeeklyWarrior } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useTaxonomy, categoryEmojiMap } from '../../src/lib/taxonomy';
@@ -27,6 +27,8 @@ export default function Discover() {
   const [data, setData] = useState<DiscoverData | null>(null);
   const [collections, setCollections] = useState<CollectionPreview[]>([]);
   const [warriors, setWarriors] = useState<WeeklyWarrior[]>([]);
+  const [potd, setPotd] = useState<Prompt | null>(null);
+  const [trendingWeek, setTrendingWeek] = useState<Prompt[]>([]);
   const [streak, setStreak] = useState<StreakStatus | null>(null);
   const [streakDismissed, setStreakDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -34,10 +36,15 @@ export default function Discover() {
 
   const load = useCallback(async () => {
     try {
-      const [d, c, w] = await Promise.all([api.discover(), api.getCollections(), api.getWeeklyWarriors()]);
+      const [d, c, w, p, tw] = await Promise.all([
+        api.discover(), api.getCollections(), api.getWeeklyWarriors(),
+        api.getPromptOfDay(), api.getTrendingWeek(),
+      ]);
       setData(d);
       setCollections(c);
       setWarriors(w);
+      setPotd(p);
+      setTrendingWeek(tw);
     } catch {}
     finally { setLoading(false); }
     try { setStreak(await api.getStreak()); } catch {}
@@ -61,6 +68,10 @@ export default function Discover() {
       newest: update(prev.newest),
       top: update(prev.top),
     } : prev);
+    setTrendingWeek((prev) => update(prev));
+    setPotd((prev) => (prev && prev.id === p.id
+      ? { ...prev, is_liked: !prev.is_liked, likes: prev.likes + (prev.is_liked ? -1 : 1) }
+      : prev));
     try { await api.likePrompt(p.id); } catch {}
   };
 
@@ -117,6 +128,49 @@ export default function Discover() {
             <Text style={[styles.quickText, styles.quickTextGold]}>👑 Go Pro</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Prompt of the Day */}
+        {potd && (
+          <>
+            <SectionHeader title="☀️ Prompt of the Day" />
+            <Pressable
+              style={styles.potdCard}
+              onPress={() => router.push(`/prompt/${potd.id}` as any)}
+              testID="potd-card"
+            >
+              <View style={styles.potdTopRow}>
+                <View style={styles.potdCatBadge}>
+                  <Text style={styles.potdCatText}>
+                    {(emojiMap[potd.category] || '✨') + ' ' + potd.category}
+                  </Text>
+                </View>
+                <Ionicons name="sunny" size={18} color={COLORS.gold} />
+              </View>
+              <Text style={styles.potdTitle} numberOfLines={2}>{potd.title}</Text>
+              <Text style={styles.potdContent} numberOfLines={3}>{potd.content}</Text>
+              <View style={styles.potdMetaRow}>
+                <Pressable
+                  style={styles.potdMeta}
+                  onPress={() => toggleLike(potd)}
+                  hitSlop={8}
+                  testID="potd-like-btn"
+                >
+                  <Ionicons
+                    name={potd.is_liked ? 'heart' : 'heart-outline'}
+                    size={15}
+                    color={potd.is_liked ? COLORS.error : COLORS.textSecondary}
+                  />
+                  <Text style={styles.potdMetaText}>{potd.likes}</Text>
+                </Pressable>
+                <View style={styles.potdMeta}>
+                  <Ionicons name="copy-outline" size={14} color={COLORS.textSecondary} />
+                  <Text style={styles.potdMetaText}>{potd.copies}</Text>
+                </View>
+                <Text style={styles.potdAuthor} numberOfLines={1}>by {potd.author_name}</Text>
+              </View>
+            </Pressable>
+          </>
+        )}
 
         {/* Weekly Warriors */}
         {warriors.length > 0 && (
@@ -186,6 +240,33 @@ export default function Discover() {
             </View>
           ))}
         </ScrollView>
+
+        {/* Trending This Week */}
+        {trendingWeek.length > 0 && (
+          <>
+            <SectionHeader title="📈 Trending This Week" />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: SPACING.md, gap: 12 }}
+              testID="trending-week-row"
+            >
+              {trendingWeek.map((p, i) => (
+                <View key={p.id} style={{ width: 290 }}>
+                  <View style={styles.weekRankChip}>
+                    <Text style={styles.weekRankText}>#{i + 1} this week</Text>
+                  </View>
+                  <PromptCard
+                    prompt={p}
+                    categoryEmoji={emojiMap[p.category]}
+                    onPress={() => router.push(`/prompt/${p.id}` as any)}
+                    onToggleLike={() => toggleLike(p)}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+          </>
+        )}
 
         {/* Categories */}
         <SectionHeader title="🗂️ Explore Categories" onSeeAll={() => router.push('/(tabs)/browse' as any)} />
@@ -284,6 +365,26 @@ const styles = StyleSheet.create({
   warriorMedal: { fontSize: 22 },
   warriorName: { color: COLORS.white, fontSize: 12.5, fontWeight: '700', marginTop: 4 },
   warriorScore: { color: COLORS.purpleLight, fontSize: 11.5, fontWeight: '700' },
+  potdCard: {
+    marginHorizontal: SPACING.md, marginBottom: SPACING.md, backgroundColor: COLORS.goldSoft,
+    borderRadius: RADIUS.lg, borderWidth: 1.5, borderColor: COLORS.gold, padding: SPACING.md, gap: 8,
+  },
+  potdTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  potdCatBadge: {
+    backgroundColor: COLORS.purpleGlow, paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill,
+  },
+  potdCatText: { color: COLORS.purpleLight, fontWeight: '700', fontSize: 12 },
+  potdTitle: { color: COLORS.white, fontSize: 18, fontWeight: '900', lineHeight: 24 },
+  potdContent: { color: COLORS.textSecondary, fontSize: 13.5, lineHeight: 20 },
+  potdMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 2 },
+  potdMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  potdMetaText: { color: COLORS.textSecondary, fontSize: 12.5, fontWeight: '700' },
+  potdAuthor: { color: COLORS.gold, fontSize: 12.5, fontWeight: '700', marginLeft: 'auto', flexShrink: 1 },
+  weekRankChip: {
+    alignSelf: 'flex-start', backgroundColor: COLORS.purple, paddingHorizontal: 10, paddingVertical: 3,
+    borderRadius: RADIUS.pill, marginBottom: 6,
+  },
+  weekRankText: { color: COLORS.gold, fontSize: 11, fontWeight: '800' },
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: SPACING.md, marginTop: SPACING.sm, marginBottom: SPACING.md,

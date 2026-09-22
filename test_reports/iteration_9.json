@@ -1,0 +1,49 @@
+{
+  "summary": "PromptVeer iteration 9 — tested the 4 new features + Ionicons tab bar. Backend 13/14 pytest PASS. (1) Prompt of the Day: GET /api/prompt-of-the-day returns a valid prompt and is deterministic back-to-back, BUT has a REAL BUG: the candidate pool is sorted by likes DESC and the pick is top[dayOrdinal % 60], so ANY like/unlike on a top-60 prompt reshuffles the pool and the POTD changes mid-day (verified live: POTD id flipped 735703... <-> 0bb2af8... across a single like/unlike). Consequence: liking the POTD instantly swaps it for a different prompt, so is_liked on the returned POTD stays false and the UI gold card content changes under the user (observed in the web preview: card changed from 'Sora Cinematic B-Roll' to '90-Day Goal Roadmap' after one like). (2) Trending This Week: returns list, respects limit, a prompt liked within 7 days enters the list. (3) Author Profiles: /api/users/{id}/profile returns user + full stats (rank/medal/score) + author's prompts only, official author OK, 404 unknown. (4) Folders CRUD: full lifecycle PASS (create->list->add(idempotent)->get->remove->delete->404), 401 unauth on all 6 routes, 404 for nonexistent prompt, cross-user access blocked (note: DELETE returns 403 while GET/POST return 404 — inconsistent but both block). Frontend (Expo web, 390x844): POTD gold card visible (potd-card), like button (potd-like-btn) increments 98->99, tapping card navigates to /prompt/[id]; Trending This Week row (trending-week-row) renders with '#1 this week' rank chips; author row on prompt detail navigates to /user/promptveer_official showing avatar fallback, 'Arjuna' RankBadge, stats 363/5484/28832 and prompts list; Save (detail-save-btn) opens modal, creating folder + saving shows toast 'Saved to \"TEST_UI_xxx\"'; Library tab shows 'My Folders' row (folders-row, folder-card-<id>) with correct '1 saved' count; folder card opens /folder/[id] with saved prompt and Remove button empties the folder; all 6 tabs (Discover/Browse/Packs/Search/Library/Profile) navigate and Ionicons render correctly (verified visually in screenshot). Minor: POTD card shows a copy icon with a BLANK count because the original 60 seed prompts and user-created prompts lack the 'copies' field (only the 300 curated prompts have copies:0).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/prompt-of-the-day", "issue": "POTD is unstable: selection is top[date.toordinal() % 60] from a pool sorted by likes DESC, created_at DESC. Any like/unlike/copy in the top-60 pool reorders it and swaps the POTD mid-day (verified: id changed across consecutive calls after one like). This also makes is_liked appear broken on the returned POTD and causes the Discover gold card to visibly change content after the user taps like. Fix: make the pool/order stable — e.g. pick from a likes-sorted snapshot taken at a fixed time, or sort candidates by an immutable key (id or created_at) and index by day ordinal, or cache the chosen prompt id per date. Reference: /app/backend/server.py:885-894", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "DELETE /api/folders/{id}", "issue": "Returns 403 'Not your folder' for existing-but-foreign folder while GET /folders/{id}, POST items, DELETE item all return 404 for the same case. Inconsistent status codes (both block access correctly). Reference: server.py:965-974"},
+      {"endpoint": "POST /api/prompts + seed_prompts_if_empty", "issue": "New prompts and the original 60 seed prompts never get a 'copies' field (only $inc creates it later). prompt_to_dict defaults avg_rating/rating_count but not copies, so API responses omit copies and the POTD card renders a blank copy count. Add copies:0 on create/seed and d.setdefault('copies', 0) in prompt_to_dict. Reference: server.py:474-495, 1188-1207, 221-231"}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "POTD card (Discover)", "issue": "Copy-count icon renders with no number when prompt lacks 'copies' (blank next to copy icon in gold card). Root cause is backend (missing copies field) — see backend_issues. Reference: /app/frontend/app/(tabs)/discover.tsx:165-168", "testID": "potd-card", "priority": "LOW"},
+      {"component": "POTD card (Discover)", "issue": "Tapping potd-like-btn swaps the entire gold card to a different prompt because the backend POTD pick changes after the like. Confusing UX; will resolve once backend POTD selection is stabilized.", "testID": "potd-like-btn", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_promptveer_v5.py",
+    "/app/test_reports/pytest/pytest_results_iter9.xml"
+  ],
+  "action_items": [
+    "HIGH: Stabilize /api/prompt-of-the-day selection (server.py:885-894) so likes/copies during the day cannot change the POTD — e.g. deterministic index over a stable sort (created_at or id), or persist chosen prompt id keyed by date.",
+    "LOW: Add copies:0 to create_prompt doc and seed docs, plus d.setdefault('copies', 0) in prompt_to_dict, so the POTD copy count never renders blank.",
+    "LOW: Align DELETE /folders/{id} to return 404 (like the other folder routes) or document 403 — pick one convention."
+  ],
+  "critical_code_review_comments": [
+    "server.py:885-894 prompt_of_the_day — unstable selection (see backend_issues.critical). This is the only real defect found this iteration; test TestPromptOfTheDay.test_is_liked_reflects_auth intentionally left failing as the regression signal.",
+    "server.py:965-974 delete_folder uses a different not-found convention (403) than get_folder/add/remove item (404) for foreign folders — inconsistent API surface.",
+    "server.py prompt_to_dict (221-231) setdefaults avg_rating/rating_count but not copies — asymmetric defaults leak missing fields to the UI.",
+    "Frontend: RN-web Playwright quirk (for future testing agents, not a bug): get_by_text clicks on Pressable children fail visibility checks when duplicate text exists on backgrounded Expo Router screens; use elementFromPoint + page.mouse.click on the topmost visible element.",
+    "No deprecated Expo packages found (no expo-av / barcode-scanner / background-fetch). Ionicons upgrade is complete in tab bar and cards."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_promptveer_v5.py (new — 14 tests for the 4 new features)"
+  ],
+  "success_rate": {
+    "backend": "93% (13/14; 1 failure = genuine POTD instability bug)",
+    "frontend": "100% of scoped flows verified (POTD card/like/nav, trending-week carousel, author profile, save-to-folder modal + toast, Library folders row, folder detail + remove, 6-tab navigation, Ionicons)"
+  },
+  "seed_data_creation": "Disposable TEST_iter9_* guest sessions; 2 UI-created folders (TEST_UI_98962, TEST_UI_99031 — left empty after remove test) owned by ephemeral browser guest sessions; TEST_debug_potd_001 guest used for POTD RCA. No production/seed data modified (likes toggled back).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Regression suite: /app/backend/tests/test_promptveer_v5.py (14 tests). After main agent fixes POTD stability, re-run TestPromptOfTheDay::test_is_liked_reflects_auth — it should pass when the POTD no longer reshuffles on like. The 2 empty TEST_UI_* folders belong to ephemeral Playwright guest sessions and are unreachable/harmless. Playwright on RN-web: Pressable text nodes often fail Playwright visibility checks (duplicate text on backgrounded screens) — use elementFromPoint + page.mouse.click. Tab links (a[href]) are only visible on tab screens, not on stack screens (/prompt, /user, /folder) — navigate back to a tab first.",
+  "rca_of_issue": "POTD instability. Repro: (1) GET /api/prompt-of-the-day -> id A; (2) POST /api/prompts/A/like (any guest token); (3) GET /api/prompt-of-the-day -> id B != A, is_liked=false. Root cause: server.py:887 picks top[date.today().toordinal() % 60] from prompts sorted by likes DESC — likes are mutable, so the ordering (and thus the element at the fixed ordinal index) changes with every like/unlike/copy in the top-60 pool. Mitigation: choose from an immutable ordering (e.g. sort candidates by id/created_at, or freeze the top-60 snapshot), or persist {date -> prompt_id} in a potd collection on first request of the day."
+}

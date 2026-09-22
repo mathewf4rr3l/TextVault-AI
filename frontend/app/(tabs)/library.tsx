@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable, TouchableOpacity, Platform,
+  View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable, TouchableOpacity, Platform, ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { api, Prompt } from '../../utils/api';
+import { api, Prompt, Folder } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useTaxonomy, categoryEmojiMap } from '../../src/lib/taxonomy';
 import PromptCard from '../../src/components/PromptCard';
@@ -17,6 +18,7 @@ export default function Library() {
   const emojiMap = categoryEmojiMap(taxonomy);
   const [tab, setTab] = useState<'uploads' | 'liked' | 'following'>('uploads');
   const [prompts, setPrompts] = useState<Prompt[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (which: 'uploads' | 'liked' | 'following') => {
@@ -26,6 +28,7 @@ export default function Library() {
       setPrompts(data);
     } catch {}
     finally { setLoading(false); }
+    try { setFolders(await api.getFolders()); } catch {}
   }, []);
 
   useFocusEffect(useCallback(() => { load(tab); }, [tab, load]));
@@ -68,6 +71,33 @@ export default function Library() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: SPACING.md, paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
+          ListHeaderComponent={folders.length > 0 ? (
+            <View style={styles.foldersSection}>
+              <View style={styles.foldersHeader}>
+                <Ionicons name="folder-open" size={17} color={COLORS.gold} />
+                <Text style={styles.foldersTitle}>My Folders</Text>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 10 }}
+                testID="folders-row"
+              >
+                {folders.map((f) => (
+                  <Pressable
+                    key={f.id}
+                    style={styles.folderCard}
+                    onPress={() => router.push(`/folder/${f.id}` as any)}
+                    testID={`folder-card-${f.id}`}
+                  >
+                    <Ionicons name="folder" size={26} color={COLORS.purpleLight} />
+                    <Text style={styles.folderName} numberOfLines={1}>{f.name}</Text>
+                    <Text style={styles.folderCount}>{f.count} saved</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
           renderItem={({ item }) => (
             <PromptCard
               prompt={item}
@@ -122,6 +152,15 @@ const styles = StyleSheet.create({
   tabActive: { backgroundColor: COLORS.purple },
   tabText: { color: COLORS.textSecondary, fontWeight: '700', fontSize: 14 },
   tabTextActive: { color: COLORS.white },
+  foldersSection: { marginBottom: SPACING.md },
+  foldersHeader: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10 },
+  foldersTitle: { color: COLORS.white, fontSize: 16, fontWeight: '800' },
+  folderCard: {
+    width: 130, backgroundColor: COLORS.card, borderRadius: RADIUS.md, borderWidth: 1,
+    borderColor: COLORS.border, padding: 12, gap: 5,
+  },
+  folderName: { color: COLORS.white, fontSize: 13.5, fontWeight: '700' },
+  folderCount: { color: COLORS.textMuted, fontSize: 11.5 },
   emptyBox: { alignItems: 'center', marginTop: 60, gap: 12, paddingHorizontal: 20 },
   emptyEmoji: { fontSize: 44 },
   empty: { color: COLORS.textMuted, textAlign: 'center', fontSize: 14.5, lineHeight: 21 },

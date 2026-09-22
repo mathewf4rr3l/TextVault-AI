@@ -56,11 +56,12 @@ Ranks 1–10: Ghatotkach → Satyaki → Bhagadatta → Abhimanyu → Bhisma →
 
 ## Backlog / Next
 ### Done this round
-- [x] Rating Filters — `min_rating` param on `/api/prompts`; "⭐ 4+/3+" chips in Browse
-- [x] Weekly Warriors — `GET /api/weekly-warriors` (last-7-day activity, excludes official); spotlight row on Discover
-- [x] Collection Following — `POST /api/collections/{id}/follow`; `is_following` on list/detail; Library "Following" tab (`?type=following`); Follow button on collection detail + badge on Packs cards
-- [x] Review Reactions — reviews carry stable `id` + `helpful_count`; `POST /api/reviews/{id}/helpful`; reviews sorted most-helpful first; 👍 button on detail
-- [x] **300 curated prompts** (30 categories × 10) in `backend/seed_data_extra.py`, synced idempotently on startup (DB ~364 prompts)
+- [x] Prompt of the Day — `GET /api/prompt-of-the-day` (stable daily pick: top-60 pool re-sorted by id so likes can't reshuffle mid-day); gold hero card on Discover (testID potd-card)
+- [x] Trending This Week — `GET /api/trending-week` (likes in last 7d, backfilled by all-time trending); rank-chip carousel on Discover
+- [x] Author Profiles — `GET /api/users/{id}/profile`; `/user/[id]` screen (avatar, rank, stats, prompts); author row on prompt detail links to it
+- [x] Save to Folders — folders CRUD + items (`/api/folders*`); save modal on prompt detail (testID detail-save-btn); `/folder/[id]` screen; "My Folders" row in Library tab
+- [x] Tab icons upgraded to Ionicons (6 tabs)
+- [x] Fixes: POTD stability bug, `copies`/`likes`/`shares` defaults in `prompt_to_dict`, folder DELETE 403→404 consistency
 
 ### Done earlier
 - [x] Ratings & Reviews — `POST /api/prompts/{id}/rate` (1–5 stars + optional review), `GET /api/prompts/{id}/reviews`; denormalized `avg_rating`/`rating_count`; `sort=top_rated`; stars on cards + rating/review UI on detail
@@ -76,9 +77,7 @@ Ranks 1–10: Ghatotkach → Satyaki → Bhagadatta → Abhimanyu → Bhisma →
 
 ### P2 (Future)
 - [ ] Activate paywall: gate premium prompts/bundles once a real Stripe key is live (entitlement is intentionally separate from payment_status)
-- [ ] Ratings/reviews, comments
 - [ ] Report/moderation for user submissions
-- [ ] Prompt Collections as a dedicated tab/surface
 
 ---
 

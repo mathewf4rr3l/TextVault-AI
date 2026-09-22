@@ -138,6 +138,26 @@ export interface StreakStatus {
   badge: { emoji: string; label: string };
 }
 
+export interface Folder {
+  id: string;
+  name: string;
+  count: number;
+  created_at?: string;
+}
+
+export interface FolderDetail {
+  id: string;
+  name: string;
+  count: number;
+  prompts: Prompt[];
+}
+
+export interface PublicProfile {
+  user: { user_id: string; name: string; picture?: string; is_official?: boolean };
+  stats: ProfileStats;
+  prompts: Prompt[];
+}
+
 export interface Profile {
   user: UserType;
   stats: ProfileStats;
@@ -241,6 +261,23 @@ export const api = {
   followCollection: (id: string) =>
     call<{ is_following: boolean }>(`/api/collections/${id}/follow`, { method: 'POST' }),
   getWeeklyWarriors: () => call<WeeklyWarrior[]>('/api/weekly-warriors'),
+  getPromptOfDay: () => call<Prompt | null>('/api/prompt-of-the-day'),
+  getTrendingWeek: () => call<Prompt[]>('/api/trending-week'),
+  getPublicProfile: (userId: string) => call<PublicProfile>(`/api/users/${userId}/profile`),
+
+  // Folders
+  getFolders: () => call<Folder[]>('/api/folders'),
+  createFolder: (name: string) =>
+    call<Folder>('/api/folders', { method: 'POST', body: JSON.stringify({ name }) }),
+  deleteFolder: (id: string) =>
+    call<{ success: boolean }>(`/api/folders/${id}`, { method: 'DELETE' }),
+  addToFolder: (folderId: string, promptId: string) =>
+    call<{ success: boolean; count: number }>(`/api/folders/${folderId}/items`, {
+      method: 'POST', body: JSON.stringify({ prompt_id: promptId }),
+    }),
+  removeFromFolder: (folderId: string, promptId: string) =>
+    call<{ success: boolean; count: number }>(`/api/folders/${folderId}/items/${promptId}`, { method: 'DELETE' }),
+  getFolder: (id: string) => call<FolderDetail>(`/api/folders/${id}`),
 
   // Payments (infra)
   getPackages: () => call<{ enabled: boolean; packages: PackageInfo[] }>('/api/payments/packages'),

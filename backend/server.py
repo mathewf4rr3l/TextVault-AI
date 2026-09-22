@@ -109,6 +109,14 @@ class RatingRequest(BaseModel):
     review: Optional[str] = Field(None, max_length=1000)
 
 
+class FolderCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+
+
+class FolderItemRequest(BaseModel):
+    prompt_id: str = Field(..., max_length=64)
+
+
 # ==================== AUTH HELPERS ====================
 
 async def get_current_user(request: Request) -> dict:
@@ -220,6 +228,9 @@ def prompt_to_dict(doc: dict, liked_ids: Optional[set] = None) -> dict:
     d["is_liked"] = bool(liked_ids and d.get("id") in liked_ids)
     d.setdefault("avg_rating", 0)
     d.setdefault("rating_count", 0)
+    d.setdefault("copies", 0)
+    d.setdefault("likes", 0)
+    d.setdefault("shares", 0)
     return d
 
 
@@ -874,6 +885,141 @@ async def weekly_warriors(limit: int = Query(5, ge=1, le=20)):
     return result
 
 
+@api_router.get("/prompt-of-the-day")
+async def prompt_of_the_day(request: Request):
+    # Pool of top prompts ordered by a STABLE key (id) so the daily pick
+    # doesn't reshuffle mid-day when likes change within the pool.
+    pool = await db.prompts.find({}, {"_id": 0}).sort([("likes", -1), ("created_at", -1)]).limit(60).to_list(60)
+    if not pool:
+        return None
+    pool.sort(key=lambda d: d["id"])
+    chosen = pool[date.today().toordinal() % len(pool)]
+    user = await get_optional_user(request)
+    liked = await liked_ids_for(user["user_id"] if user else None, [chosen["id"]])
+    return prompt_to_dict(chosen, liked)
+
+
+@api_router.get("/trending-week")
+async def trending_week(request: Request, limit: int = Query(12, ge=1, le=30)):
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    agg = await db.prompt_likes.aggregate([
+        {"$match": {"created_at": {"$gte": week_ago}}},
+        {"$group": {"_id": "$prompt_id", "c": {"$sum": 1}}},
+        {"$sort": {"c": -1}},
+        {"$limit": limit},
+    ]).to_list(limit)
+    ids = [a["_id"] for a in agg]
+    docs = await db.prompts.find({"id": {"$in": ids}}, {"_id": 0}).to_list(limit) if ids else []
+    order = {pid: i for i, pid in enumerate(ids)}
+    docs.sort(key=lambda d: order.get(d["id"], 9999))
+    # Fill up with all-time trending if not enough weekly activity
+    if len(docs) < limit:
+        have = {d["id"] for d in docs}
+        extra = await db.prompts.find({"id": {"$nin": list(have)}}, {"_id": 0}) \
+            .sort([("trending_score", -1)]).limit(limit - len(docs)).to_list(limit)
+        docs.extend(extra)
+    user = await get_optional_user(request)
+    liked = await liked_ids_for(user["user_id"] if user else None, [d["id"] for d in docs])
+    return [prompt_to_dict(d, liked) for d in docs]
+
+
+@api_router.get("/users/{user_id}/profile")
+async def public_profile(user_id: str, request: Request):
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "user_id": 1, "name": 1, "picture": 1, "is_official": 1})
+    if not u:
+        raise HTTPException(404, "User not found")
+    stats = await db.gamification.find_one({"user_id": user_id}, {"_id": 0})
+    if not stats:
+        stats = await recompute_gamification(user_id)
+    docs = await db.prompts.find({"author_id": user_id}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
+    viewer = await get_optional_user(request)
+    liked = await liked_ids_for(viewer["user_id"] if viewer else None, [d["id"] for d in docs])
+    return {
+        "user": u,
+        "stats": build_profile_stats(stats),
+        "prompts": [prompt_to_dict(d, liked) for d in docs],
+    }
+
+
+# ==================== FOLDERS (Save to Folders) ====================
+
+@api_router.get("/folders")
+async def list_folders(current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"]
+    folders = await db.folders.find({"user_id": uid}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    for f in folders:
+        f["count"] = await db.folder_items.count_documents({"folder_id": f["id"]})
+        if isinstance(f.get("created_at"), datetime):
+            f["created_at"] = f["created_at"].isoformat()
+    return folders
+
+
+@api_router.post("/folders")
+async def create_folder(body: FolderCreate, current_user: dict = Depends(get_current_user)):
+    folder = {
+        "id": uuid.uuid4().hex,
+        "user_id": current_user["user_id"],
+        "name": body.name.strip(),
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.folders.insert_one(folder)
+    return {"id": folder["id"], "name": folder["name"], "count": 0,
+            "created_at": folder["created_at"].isoformat()}
+
+
+@api_router.delete("/folders/{folder_id}")
+async def delete_folder(folder_id: str, current_user: dict = Depends(get_current_user)):
+    f = await db.folders.find_one({"id": folder_id})
+    if not f or f["user_id"] != current_user["user_id"]:
+        raise HTTPException(404, "Folder not found")
+    await db.folders.delete_one({"id": folder_id})
+    await db.folder_items.delete_many({"folder_id": folder_id})
+    return {"success": True}
+
+
+@api_router.post("/folders/{folder_id}/items")
+async def add_folder_item(folder_id: str, body: FolderItemRequest, current_user: dict = Depends(get_current_user)):
+    f = await db.folders.find_one({"id": folder_id})
+    if not f or f["user_id"] != current_user["user_id"]:
+        raise HTTPException(404, "Folder not found")
+    if not await db.prompts.find_one({"id": body.prompt_id}, {"_id": 1}):
+        raise HTTPException(404, "Prompt not found")
+    await db.folder_items.update_one(
+        {"folder_id": folder_id, "prompt_id": body.prompt_id},
+        {"$setOnInsert": {"folder_id": folder_id, "user_id": current_user["user_id"],
+                          "prompt_id": body.prompt_id, "created_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    count = await db.folder_items.count_documents({"folder_id": folder_id})
+    return {"success": True, "count": count}
+
+
+@api_router.delete("/folders/{folder_id}/items/{prompt_id}")
+async def remove_folder_item(folder_id: str, prompt_id: str, current_user: dict = Depends(get_current_user)):
+    f = await db.folders.find_one({"id": folder_id})
+    if not f or f["user_id"] != current_user["user_id"]:
+        raise HTTPException(404, "Folder not found")
+    await db.folder_items.delete_one({"folder_id": folder_id, "prompt_id": prompt_id})
+    count = await db.folder_items.count_documents({"folder_id": folder_id})
+    return {"success": True, "count": count}
+
+
+@api_router.get("/folders/{folder_id}")
+async def get_folder(folder_id: str, current_user: dict = Depends(get_current_user)):
+    f = await db.folders.find_one({"id": folder_id}, {"_id": 0})
+    if not f or f["user_id"] != current_user["user_id"]:
+        raise HTTPException(404, "Folder not found")
+    items = await db.folder_items.find({"folder_id": folder_id}, {"_id": 0, "prompt_id": 1}) \
+        .sort("created_at", -1).to_list(200)
+    ids = [it["prompt_id"] for it in items]
+    docs = await db.prompts.find({"id": {"$in": ids}}, {"_id": 0}).to_list(200) if ids else []
+    order = {pid: i for i, pid in enumerate(ids)}
+    docs.sort(key=lambda d: order.get(d["id"], 9999))
+    liked = await liked_ids_for(current_user["user_id"], ids)
+    return {"id": f["id"], "name": f["name"], "count": len(docs),
+            "prompts": [prompt_to_dict(d, liked) for d in docs]}
+
+
 # ==================== PAYMENTS (Stripe infra — all content free for MVP) ====================
 
 class CheckoutRequest(BaseModel):
@@ -1126,6 +1272,9 @@ async def startup():
         await db.ratings.create_index("id")
         await db.review_reactions.create_index([("rating_id", 1), ("user_id", 1)], unique=True)
         await db.collection_follows.create_index([("user_id", 1), ("collection_id", 1)], unique=True)
+        await db.folders.create_index([("user_id", 1), ("created_at", -1)])
+        await db.folders.create_index("id", unique=True)
+        await db.folder_items.create_index([("folder_id", 1), ("prompt_id", 1)], unique=True)
         await db.gamification.create_index("user_id", unique=True)
         await db.gamification.create_index([("score", -1)])
         await db.payment_transactions.create_index("session_id", unique=True)
