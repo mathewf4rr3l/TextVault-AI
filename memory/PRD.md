@@ -56,6 +56,12 @@ Ranks 1–10: Ghatotkach → Satyaki → Bhagadatta → Abhimanyu → Bhisma →
 
 ## Backlog / Next
 ### Done this round
+- [x] Prompt Report — `POST /api/prompts/{id}/report` (reason: spam/low_quality/copied/other; idempotent; prompt stays visible); flag button + reason modal on prompt detail
+- [x] Share Folders — publish a folder as a public pack (`POST /api/folders/{id}/publish`); `GET /api/community-folders` + `/{id}`; follow packs (`POST /api/community-folders/{id}/follow`); "Community Packs" row on Packs tab; `/pack/[id]` public view; publish toggle + Share button on owner folder screen
+- [x] Daily Reminder — dismissible "Today's pick is ready" banner on Discover linking to POTD (once/day via local storage)
+- [x] Fixed missing save-to-folder modal styles on prompt detail
+
+### Done earlier
 - [x] Prompt of the Day — `GET /api/prompt-of-the-day` (stable daily pick: top-60 pool re-sorted by id so likes can't reshuffle mid-day); gold hero card on Discover (testID potd-card)
 - [x] Trending This Week — `GET /api/trending-week` (likes in last 7d, backfilled by all-time trending); rank-chip carousel on Discover
 - [x] Author Profiles — `GET /api/users/{id}/profile`; `/user/[id]` screen (avatar, rank, stats, prompts); author row on prompt detail links to it

@@ -7,10 +7,27 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as SecureStore from 'expo-secure-store';
 import { api, Prompt, CollectionPreview, StreakStatus, WeeklyWarrior } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useTaxonomy, categoryEmojiMap } from '../../src/lib/taxonomy';
 import PromptCard from '../../src/components/PromptCard';
+
+const POTD_SEEN_KEY = 'promptveer_potd_seen';
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+async function readPotdSeen(): Promise<string | null> {
+  try {
+    if (Platform.OS === 'web') return typeof window !== 'undefined' ? window.localStorage.getItem(POTD_SEEN_KEY) : null;
+    return await SecureStore.getItemAsync(POTD_SEEN_KEY);
+  } catch { return null; }
+}
+async function writePotdSeen(day: string) {
+  try {
+    if (Platform.OS === 'web') { if (typeof window !== 'undefined') window.localStorage.setItem(POTD_SEEN_KEY, day); return; }
+    await SecureStore.setItemAsync(POTD_SEEN_KEY, day);
+  } catch {}
+}
 
 type DiscoverData = {
   trending: Prompt[];
@@ -29,6 +46,7 @@ export default function Discover() {
   const [warriors, setWarriors] = useState<WeeklyWarrior[]>([]);
   const [potd, setPotd] = useState<Prompt | null>(null);
   const [trendingWeek, setTrendingWeek] = useState<Prompt[]>([]);
+  const [potdReminder, setPotdReminder] = useState(false);
   const [streak, setStreak] = useState<StreakStatus | null>(null);
   const [streakDismissed, setStreakDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -45,6 +63,10 @@ export default function Discover() {
       setWarriors(w);
       setPotd(p);
       setTrendingWeek(tw);
+      if (p) {
+        const seen = await readPotdSeen();
+        setPotdReminder(seen !== todayStr());
+      }
     } catch {}
     finally { setLoading(false); }
     try { setStreak(await api.getStreak()); } catch {}
@@ -88,6 +110,24 @@ export default function Discover() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.gold} />}
       >
+        {/* Prompt of the Day reminder */}
+        {potd && potdReminder && (
+          <Pressable
+            style={styles.potdBanner}
+            onPress={() => { writePotdSeen(todayStr()); setPotdReminder(false); router.push(`/prompt/${potd.id}` as any); }}
+            testID="potd-reminder"
+          >
+            <Ionicons name="sunny" size={22} color={COLORS.gold} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.potdBannerTitle}>Today&apos;s pick is ready 👀</Text>
+              <Text style={styles.potdBannerSub} numberOfLines={1}>{potd.title}</Text>
+            </View>
+            <Pressable onPress={() => { writePotdSeen(todayStr()); setPotdReminder(false); }} hitSlop={10}>
+              <Text style={styles.streakBannerClose}>✕</Text>
+            </Pressable>
+          </Pressable>
+        )}
+
         {/* Streak reminder */}
         {streak?.at_risk && !streakDismissed && (
           <Pressable
@@ -339,6 +379,12 @@ const styles = StyleSheet.create({
   streakBannerTitle: { color: COLORS.white, fontSize: 14.5, fontWeight: '800' },
   streakBannerSub: { color: COLORS.textSecondary, fontSize: 12.5, marginTop: 2 },
   streakBannerClose: { color: COLORS.textMuted, fontSize: 16, fontWeight: '700' },
+  potdBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: SPACING.md, marginBottom: SPACING.md,
+    backgroundColor: COLORS.purpleGlow, borderRadius: RADIUS.lg, padding: 14, borderWidth: 1, borderColor: COLORS.purpleLight,
+  },
+  potdBannerTitle: { color: COLORS.white, fontSize: 14.5, fontWeight: '800' },
+  potdBannerSub: { color: COLORS.purpleLight, fontSize: 12.5, marginTop: 2 },
   quickBtn: {
     flex: 1, backgroundColor: COLORS.card, borderRadius: RADIUS.md, paddingVertical: 12,
     alignItems: 'center', borderWidth: 1, borderColor: COLORS.border,

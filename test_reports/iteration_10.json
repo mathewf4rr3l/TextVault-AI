@@ -1,0 +1,46 @@
+{
+  "summary": "PromptVeer iteration 10 — tested 3 new features (Report Prompt, Publish Folder / Community Packs, POTD Reminder banner). Backend 23/23 pytest PASS. (1) POST /api/prompts/{id}/report: valid reason echoed, invalid reason coerced to 'other', idempotent upsert (same user re-reports fine), 401 without auth, 404 for unknown prompt, prompt stays visible after report. (2) POST /api/folders/{id}/publish: toggles is_public true/false, GET /api/folders and GET /api/folders/{id} now include is_public + followers, 404 for non-owner, 401 without auth. (3) /api/community-folders: lists only public folders with count>=1 (empty published folder correctly excluded), includes owner_name, followers, is_following, is_mine, emoji. /api/community-folders/{id}: 404 when folder not public, POST /follow toggles and returns followers count; 404 on private folder follow, 401 without auth. Regression: POTD stable, trending-week list works, save-to-folder flow works. Frontend (Expo web, 390x844): potd-reminder banner visible on fresh load, tapping navigates to /prompt/[id] (the Prompt of the Day), the ✕ dismisses it and the banner disappears. On prompt detail: report-btn opens report modal, tapping report-reason-spam closes modal, 'Thanks — our team will review it' toast appears, and report-btn becomes disabled/filled (aria-disabled=true). detail-save-btn opens Save modal correctly. On Packs tab: community-packs-row renders, community-pack-<id> card visible (verified with a folder pre-created via API), tapping opens /pack/[id]; community-follow-<id> button toggles state (rendered 'Following' after click, verified in screenshot). On /pack/[id]: follow-pack-btn is present, prompts list renders, owner sees no follow button (backend is_mine=true confirmed). Discover regression: potd-card and trending-week-row still render. Frontend blocker for full UI test of publish flow: the Save-to-folder modal's create button uses an Ionicons 'add' icon with no testID, so Playwright cannot reliably create a folder via UI without knowing the icon position — impacts test automation, not real users. publish-switch and share-pack-btn testIDs exist in /app/frontend/app/folder/[id].tsx:92,96 and the underlying API is fully verified by pytest.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "/pack/[id] follow-pack-btn optimistic rollback", "issue": "When the follow API call fails (e.g., auth still initializing), toggleFollow rolls back is_following but does NOT roll back the optimistic followers count increment/decrement. Result: followers count can drift up by 1 per failed click while the button label stays 'Follow pack'. Reference: /app/frontend/app/pack/[id].tsx:33-39 — the catch{} branch should also revert followers by ±1.", "testID": "follow-pack-btn", "priority": "LOW"},
+      {"component": "Save-to-folder modal create-folder button", "issue": "The yellow '+' create-folder button in the Save modal renders an <Ionicons name='add'> icon with NO testID and no accessible text label. This makes the flow non-testable via Playwright/testID and hurts a11y. Add testID='save-create-folder-btn' (and accessibilityLabel) to the Pressable in /app/frontend/app/prompt/[id].tsx around the save modal input+button. Reference: /app/frontend/app/prompt/[id].tsx (save modal region).", "testID": "save-create-folder-btn (missing)", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_promptveer_v6.py",
+    "/app/test_reports/pytest/pytest_results_iter10.xml"
+  ],
+  "action_items": [
+    "MEDIUM: Add testID='save-create-folder-btn' (and accessibilityLabel='Create folder') to the yellow '+' Pressable in the Save-to-folder modal in /app/frontend/app/prompt/[id].tsx so UI automation can create folders and screen readers can announce it.",
+    "LOW: In /app/frontend/app/pack/[id].tsx:33-39 toggleFollow(), the catch{} branch should also revert followers count (`followers: prev.followers + (next ? -1 : 1)`), not only is_following. Currently a failed follow leaves followers pre-incremented.",
+    "NONE required for backend — all 23 tests pass, no defects found."
+  ],
+  "critical_code_review_comments": [
+    "server.py:627-647 report_prompt — idempotent upsert on (prompt_id, user_id) with reason coerced to REPORT_REASONS set. Unique index at server.py:1403 enforces one-per-user. Clean.",
+    "server.py:1059-1067 toggle_folder_public — owner-only, simple boolean flip. Returns 404 on foreign folder (consistent with other folder routes after iter9 fix).",
+    "server.py:1070-1100 community_folders — filters is_public + count>=1, sorted by followers desc, includes is_mine/is_following flags. Emoji derived from first prompt's category — falls back to '📦' if category missing. Fine.",
+    "server.py:1129-1144 toggle_folder_follow — 404 if not public (protects private folders from being followed via URL). Good defensive check.",
+    "server.py grew to 1424 lines — approaching the 700-line split threshold from code_review_guidelines but no worse than iter9. Consider splitting into routers/folders.py, routers/reports.py etc. in a future refactor.",
+    "Frontend /app/frontend/app/pack/[id].tsx:33-39 has the followers-rollback bug noted above; otherwise the optimistic pattern is correct.",
+    "No deprecated Expo packages found (checked package.json: no expo-av / expo-barcode-scanner / expo-background-fetch)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_promptveer_v6.py (new — 23 tests covering report, publish, community-folders, follow + regression)"
+  ],
+  "success_rate": {
+    "backend": "100% (23/23)",
+    "frontend": "95% (verified: potd-reminder show+tap+dismiss, report-btn+report-reason-*+toast+disabled state, community-packs-row, community-pack-<id> navigation to /pack/[id], community-follow-<id> toggle, follow-pack-btn present + prompts list; NOT verified in UI (backend-only) due to save-modal '+' having no testID: publish-switch toggle and share-pack-btn appearing on folder detail — both testIDs exist in code and the underlying APIs pass)"
+  },
+  "seed_data_creation": "TESTPACK_UI_visible public folder (id 296b1a128c3747ddbc621ae099f45f4e) owned by ephemeral guest 'Warrior 4E59' with 1 prompt inside, published — used to verify community packs UI. Multiple TEST_iter10_* guest sessions from pytest. All test folders are inside disposable guest accounts and left in a benign state (published, followers=1-2).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Regression suite: /app/backend/tests/test_promptveer_v6.py (23 tests, all passing). Reuse for iteration 11+. To fully UI-test the publish flow, the Save-modal create-button needs testID='save-create-folder-btn' (see action_items). Alternative approach: pre-create a folder via /api/folders + /api/folders/{id}/items + /api/folders/{id}/publish using a captured guest token, then navigate to /folder/{id} directly (this bypasses the save-modal UI limitation). The public folder 296b1a12... is a good seed for testing community pack navigation. Note: Multiple 'Failed to load resource: 401' console errors on first page load are expected — /api/auth/me is called before the guest session is established; harmless.",
+  "rca_of_issue": "N/A — no critical bugs. Two low/medium issues logged in frontend_issues.ui_bugs (followers-rollback + missing testID)."
+}

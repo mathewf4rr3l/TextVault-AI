@@ -142,6 +142,8 @@ export interface Folder {
   id: string;
   name: string;
   count: number;
+  is_public?: boolean;
+  followers?: number;
   created_at?: string;
 }
 
@@ -149,6 +151,32 @@ export interface FolderDetail {
   id: string;
   name: string;
   count: number;
+  is_public?: boolean;
+  followers?: number;
+  prompts: Prompt[];
+}
+
+export interface CommunityFolder {
+  id: string;
+  name: string;
+  count: number;
+  emoji: string;
+  owner_name: string;
+  owner_id: string;
+  followers: number;
+  is_following: boolean;
+  is_mine: boolean;
+}
+
+export interface CommunityFolderDetail {
+  id: string;
+  name: string;
+  count: number;
+  owner_name: string;
+  owner_id: string;
+  followers: number;
+  is_following: boolean;
+  is_mine: boolean;
   prompts: Prompt[];
 }
 
@@ -278,6 +306,18 @@ export const api = {
   removeFromFolder: (folderId: string, promptId: string) =>
     call<{ success: boolean; count: number }>(`/api/folders/${folderId}/items/${promptId}`, { method: 'DELETE' }),
   getFolder: (id: string) => call<FolderDetail>(`/api/folders/${id}`),
+  publishFolder: (id: string) =>
+    call<{ is_public: boolean }>(`/api/folders/${id}/publish`, { method: 'POST' }),
+  getCommunityFolders: () => call<CommunityFolder[]>('/api/community-folders'),
+  getCommunityFolder: (id: string) => call<CommunityFolderDetail>(`/api/community-folders/${id}`),
+  followFolder: (id: string) =>
+    call<{ is_following: boolean; followers: number }>(`/api/community-folders/${id}/follow`, { method: 'POST' }),
+
+  // Report
+  reportPrompt: (id: string, reason: string, details?: string) =>
+    call<{ success: boolean; reason: string }>(`/api/prompts/${id}/report`, {
+      method: 'POST', body: JSON.stringify({ reason, details }),
+    }),
 
   // Payments (infra)
   getPackages: () => call<{ enabled: boolean; packages: PackageInfo[] }>('/api/payments/packages'),

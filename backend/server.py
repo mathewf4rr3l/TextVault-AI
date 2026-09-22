@@ -117,6 +117,14 @@ class FolderItemRequest(BaseModel):
     prompt_id: str = Field(..., max_length=64)
 
 
+class ReportRequest(BaseModel):
+    reason: str = Field(..., max_length=20)
+    details: Optional[str] = Field(None, max_length=500)
+
+
+REPORT_REASONS = {"spam", "low_quality", "copied", "other"}
+
+
 # ==================== AUTH HELPERS ====================
 
 async def get_current_user(request: Request) -> dict:
@@ -616,6 +624,29 @@ async def copy_prompt(prompt_id: str, current_user: dict = Depends(get_current_u
     }
 
 
+@api_router.post("/prompts/{prompt_id}/report")
+async def report_prompt(prompt_id: str, body: ReportRequest, current_user: dict = Depends(get_current_user)):
+    """Flag a prompt for admin review. Prompt stays visible; one report per user per prompt."""
+    doc = await db.prompts.find_one({"id": prompt_id}, {"_id": 1})
+    if not doc:
+        raise HTTPException(404, "Prompt not found")
+    reason = body.reason if body.reason in REPORT_REASONS else "other"
+    uid = current_user["user_id"]
+    await db.reports.update_one(
+        {"prompt_id": prompt_id, "user_id": uid},
+        {"$set": {
+            "prompt_id": prompt_id,
+            "user_id": uid,
+            "reason": reason,
+            "details": (body.details or "").strip(),
+            "status": "open",
+            "created_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    return {"success": True, "reason": reason}
+
+
 @api_router.post("/prompts/{prompt_id}/rate")
 async def rate_prompt(prompt_id: str, body: RatingRequest, current_user: dict = Depends(get_current_user)):
     doc = await db.prompts.find_one({"id": prompt_id})
@@ -949,6 +980,8 @@ async def list_folders(current_user: dict = Depends(get_current_user)):
     folders = await db.folders.find({"user_id": uid}, {"_id": 0}).sort("created_at", -1).to_list(100)
     for f in folders:
         f["count"] = await db.folder_items.count_documents({"folder_id": f["id"]})
+        f["is_public"] = bool(f.get("is_public"))
+        f["followers"] = await db.folder_follows.count_documents({"folder_id": f["id"]})
         if isinstance(f.get("created_at"), datetime):
             f["created_at"] = f["created_at"].isoformat()
     return folders
@@ -974,6 +1007,7 @@ async def delete_folder(folder_id: str, current_user: dict = Depends(get_current
         raise HTTPException(404, "Folder not found")
     await db.folders.delete_one({"id": folder_id})
     await db.folder_items.delete_many({"folder_id": folder_id})
+    await db.folder_follows.delete_many({"folder_id": folder_id})
     return {"success": True}
 
 
@@ -1017,7 +1051,97 @@ async def get_folder(folder_id: str, current_user: dict = Depends(get_current_us
     docs.sort(key=lambda d: order.get(d["id"], 9999))
     liked = await liked_ids_for(current_user["user_id"], ids)
     return {"id": f["id"], "name": f["name"], "count": len(docs),
+            "is_public": bool(f.get("is_public")),
+            "followers": await db.folder_follows.count_documents({"folder_id": folder_id}),
             "prompts": [prompt_to_dict(d, liked) for d in docs]}
+
+
+@api_router.post("/folders/{folder_id}/publish")
+async def toggle_folder_public(folder_id: str, current_user: dict = Depends(get_current_user)):
+    """Publish/unpublish a folder as a public pack others can view and follow."""
+    f = await db.folders.find_one({"id": folder_id})
+    if not f or f["user_id"] != current_user["user_id"]:
+        raise HTTPException(404, "Folder not found")
+    new_val = not bool(f.get("is_public"))
+    await db.folders.update_one({"id": folder_id}, {"$set": {"is_public": new_val}})
+    return {"is_public": new_val}
+
+
+@api_router.get("/community-folders")
+async def community_folders(request: Request, limit: int = Query(50, ge=1, le=100)):
+    """Public packs published by the community, most-followed first."""
+    viewer = await get_optional_user(request)
+    vid = viewer["user_id"] if viewer else None
+    folders = await db.folders.find({"is_public": True}, {"_id": 0}).to_list(200)
+    out = []
+    for f in folders:
+        count = await db.folder_items.count_documents({"folder_id": f["id"]})
+        if count == 0:
+            continue
+        owner = await db.users.find_one({"user_id": f["user_id"]}, {"_id": 0, "name": 1, "picture": 1})
+        preview = await db.folder_items.find({"folder_id": f["id"]}, {"_id": 0, "prompt_id": 1}).limit(1).to_list(1)
+        emoji = "📦"
+        if preview:
+            p = await db.prompts.find_one({"id": preview[0]["prompt_id"]}, {"_id": 0, "category": 1})
+            if p:
+                emoji = next((c["emoji"] for c in CATEGORIES if c["name"] == p.get("category")), "📦")
+        out.append({
+            "id": f["id"],
+            "name": f["name"],
+            "count": count,
+            "emoji": emoji,
+            "owner_name": (owner or {}).get("name", "Warrior"),
+            "owner_id": f["user_id"],
+            "followers": await db.folder_follows.count_documents({"folder_id": f["id"]}),
+            "is_following": bool(vid and await db.folder_follows.find_one({"folder_id": f["id"], "user_id": vid})),
+            "is_mine": f["user_id"] == vid,
+        })
+    out.sort(key=lambda x: x["followers"], reverse=True)
+    return out[:limit]
+
+
+@api_router.get("/community-folders/{folder_id}")
+async def community_folder_detail(folder_id: str, request: Request):
+    f = await db.folders.find_one({"id": folder_id}, {"_id": 0})
+    if not f or not f.get("is_public"):
+        raise HTTPException(404, "Pack not found")
+    items = await db.folder_items.find({"folder_id": folder_id}, {"_id": 0, "prompt_id": 1}) \
+        .sort("created_at", -1).to_list(200)
+    ids = [it["prompt_id"] for it in items]
+    docs = await db.prompts.find({"id": {"$in": ids}}, {"_id": 0}).to_list(200) if ids else []
+    order = {pid: i for i, pid in enumerate(ids)}
+    docs.sort(key=lambda d: order.get(d["id"], 9999))
+    viewer = await get_optional_user(request)
+    vid = viewer["user_id"] if viewer else None
+    liked = await liked_ids_for(vid, ids)
+    owner = await db.users.find_one({"user_id": f["user_id"]}, {"_id": 0, "name": 1, "picture": 1})
+    return {
+        "id": f["id"], "name": f["name"], "count": len(docs),
+        "owner_name": (owner or {}).get("name", "Warrior"),
+        "owner_id": f["user_id"],
+        "followers": await db.folder_follows.count_documents({"folder_id": folder_id}),
+        "is_following": bool(vid and await db.folder_follows.find_one({"folder_id": folder_id, "user_id": vid})),
+        "is_mine": f["user_id"] == vid,
+        "prompts": [prompt_to_dict(d, liked) for d in docs],
+    }
+
+
+@api_router.post("/community-folders/{folder_id}/follow")
+async def toggle_folder_follow(folder_id: str, current_user: dict = Depends(get_current_user)):
+    f = await db.folders.find_one({"id": folder_id})
+    if not f or not f.get("is_public"):
+        raise HTTPException(404, "Pack not found")
+    uid = current_user["user_id"]
+    existing = await db.folder_follows.find_one({"folder_id": folder_id, "user_id": uid})
+    if existing:
+        await db.folder_follows.delete_one({"folder_id": folder_id, "user_id": uid})
+        is_following = False
+    else:
+        await db.folder_follows.insert_one({"folder_id": folder_id, "user_id": uid,
+                                            "created_at": datetime.now(timezone.utc)})
+        is_following = True
+    followers = await db.folder_follows.count_documents({"folder_id": folder_id})
+    return {"is_following": is_following, "followers": followers}
 
 
 # ==================== PAYMENTS (Stripe infra — all content free for MVP) ====================
@@ -1275,6 +1399,8 @@ async def startup():
         await db.folders.create_index([("user_id", 1), ("created_at", -1)])
         await db.folders.create_index("id", unique=True)
         await db.folder_items.create_index([("folder_id", 1), ("prompt_id", 1)], unique=True)
+        await db.folder_follows.create_index([("folder_id", 1), ("user_id", 1)], unique=True)
+        await db.reports.create_index([("prompt_id", 1), ("user_id", 1)], unique=True)
         await db.gamification.create_index("user_id", unique=True)
         await db.gamification.create_index([("score", -1)])
         await db.payment_transactions.create_index("session_id", unique=True)

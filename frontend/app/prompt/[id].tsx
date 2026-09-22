@@ -30,6 +30,25 @@ export default function PromptDetail() {
   const [folders, setFolders] = useState<Folder[]>([]);
   const [newFolder, setNewFolder] = useState('');
   const [savedMsg, setSavedMsg] = useState('');
+  const [showReport, setShowReport] = useState(false);
+  const [reported, setReported] = useState(false);
+
+  const REPORT_REASONS: { key: string; label: string }[] = [
+    { key: 'spam', label: '🚫 Spam or advertising' },
+    { key: 'low_quality', label: '👎 Low quality / not useful' },
+    { key: 'copied', label: '📋 Copied / stolen prompt' },
+    { key: 'other', label: '⚠️ Something else' },
+  ];
+
+  const submitReport = async (reason: string) => {
+    if (!prompt) return;
+    setShowReport(false);
+    setReported(true);
+    if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setSavedMsg('Thanks — our team will review it');
+    setTimeout(() => setSavedMsg(''), 3000);
+    try { await api.reportPrompt(prompt.id, reason); } catch {}
+  };
 
   const openSave = async () => {
     setShowSave(true);
@@ -161,8 +180,12 @@ export default function PromptDetail() {
     <View style={styles.container}>
       <View style={[styles.topBar, { paddingTop: insets.top + 6 }]}>
         <Pressable onPress={() => router.back()} hitSlop={10}><Text style={styles.backIcon}>←</Text></Pressable>
-        {isAuthor && (
+        {isAuthor ? (
           <Pressable onPress={onDelete} hitSlop={10}><Text style={styles.deleteIcon}>🗑️</Text></Pressable>
+        ) : (
+          <Pressable onPress={() => setShowReport(true)} hitSlop={10} testID="report-btn" disabled={reported}>
+            <Ionicons name={reported ? 'flag' : 'flag-outline'} size={22} color={reported ? COLORS.gold : COLORS.textMuted} />
+          </Pressable>
         )}
       </View>
 
@@ -284,7 +307,7 @@ export default function PromptDetail() {
               onChangeText={setNewFolder}
               maxLength={60}
             />
-            <TouchableOpacity style={styles.createBtn} onPress={createAndSave} disabled={!newFolder.trim()}>
+            <TouchableOpacity style={styles.createBtn} onPress={createAndSave} disabled={!newFolder.trim()} testID="save-create-folder-btn">
               <Ionicons name="add" size={22} color="#2A1400" />
             </TouchableOpacity>
           </View>
@@ -299,6 +322,27 @@ export default function PromptDetail() {
               </TouchableOpacity>
             ))}
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Report modal */}
+      <Modal visible={showReport} transparent animationType="slide" onRequestClose={() => setShowReport(false)}>
+        <Pressable style={styles.modalBackdrop} onPress={() => setShowReport(false)} />
+        <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 20 }]}>
+          <View style={styles.modalHandle} />
+          <Text style={styles.modalTitle}>Report this prompt</Text>
+          <Text style={styles.reportSub}>Why are you reporting it? It stays visible while our team reviews.</Text>
+          {REPORT_REASONS.map((r) => (
+            <TouchableOpacity
+              key={r.key}
+              style={styles.reasonRow}
+              onPress={() => submitReport(r.key)}
+              testID={`report-reason-${r.key}`}
+            >
+              <Text style={styles.reasonText}>{r.label}</Text>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+            </TouchableOpacity>
+          ))}
         </View>
       </Modal>
     </View>
@@ -369,4 +413,35 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: COLORS.gold,
   },
   streakToastText: { color: COLORS.white, fontWeight: '800', fontSize: 14 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
+  modalSheet: {
+    backgroundColor: COLORS.backgroundAlt, borderTopLeftRadius: 22, borderTopRightRadius: 22,
+    paddingHorizontal: SPACING.md, paddingTop: 10, borderTopWidth: 1, borderColor: COLORS.border,
+  },
+  modalHandle: {
+    alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: COLORS.border, marginBottom: 14,
+  },
+  modalTitle: { color: COLORS.white, fontSize: 18, fontWeight: '900', marginBottom: 14 },
+  createRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  folderInput: {
+    flex: 1, backgroundColor: COLORS.card, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border,
+    color: COLORS.white, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15,
+  },
+  createBtn: {
+    width: 46, borderRadius: RADIUS.md, backgroundColor: COLORS.gold, justifyContent: 'center', alignItems: 'center',
+  },
+  noFolders: { color: COLORS.textMuted, fontSize: 14, textAlign: 'center', paddingVertical: 20 },
+  folderRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  folderName: { color: COLORS.white, fontSize: 15, fontWeight: '600', flex: 1 },
+  folderCount: { color: COLORS.textMuted, fontSize: 13, fontWeight: '700' },
+  reportSub: { color: COLORS.textSecondary, fontSize: 13.5, lineHeight: 19, marginBottom: 14, marginTop: -6 },
+  reasonRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: COLORS.card, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border,
+    paddingHorizontal: 14, paddingVertical: 15, marginBottom: 10,
+  },
+  reasonText: { color: COLORS.white, fontSize: 15, fontWeight: '600' },
 });
