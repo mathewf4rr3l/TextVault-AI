@@ -202,3 +202,52 @@ def next_rank_for_score(score: int):
         if score < r["min_score"]:
             return r
     return None
+
+
+
+# ==================== CURATED COLLECTIONS ====================
+# Dynamic packs built from existing prompts via a filter spec.
+COLLECTIONS = [
+    {"id": "midjourney-mastery", "title": "Midjourney Mastery", "subtitle": "Stunning image prompts",
+     "emoji": "🎨", "color": "#7C3AED", "filter": {"tool": "Midjourney"}},
+    {"id": "chatgpt-essentials", "title": "ChatGPT Essentials", "subtitle": "Everyday power prompts",
+     "emoji": "🤖", "color": "#3ED598", "filter": {"tool": "ChatGPT"}},
+    {"id": "marketing-power", "title": "Marketing Power Pack", "subtitle": "Grow your brand fast",
+     "emoji": "📣", "color": "#FF7043", "filter": {"category": "Marketing"}},
+    {"id": "developer-toolkit", "title": "Developer Toolkit", "subtitle": "Ship code faster",
+     "emoji": "💻", "color": "#4FC3F7", "filter": {"category": "Coding & Development"}},
+    {"id": "career-launchpad", "title": "Career Launchpad", "subtitle": "Land your dream job",
+     "emoji": "👨‍💼", "color": "#F5C542", "filter": {"category": "Career & Jobs"}},
+    {"id": "ai-video-viral", "title": "AI Video Viral Kit", "subtitle": "Sora, Runway & more",
+     "emoji": "🎬", "color": "#A78BFA", "filter": {"category": "AI Video"}},
+    {"id": "writers-room", "title": "The Writers' Room", "subtitle": "Copy that converts",
+     "emoji": "✍️", "color": "#EC4899", "filter": {"category": "Writing & Content"}},
+    {"id": "founder-stack", "title": "Founder Stack", "subtitle": "Build & pitch your startup",
+     "emoji": "🚀", "color": "#F59E0B", "filter": {"category": "Startup & Entrepreneurship"}},
+]
+
+COLLECTIONS_BY_ID = {c["id"]: c for c in COLLECTIONS}
+
+
+# ==================== STREAK BADGES ====================
+def streak_badge(streak: int):
+    if streak >= 30:
+        return {"emoji": "☄️", "label": "Legendary"}
+    if streak >= 7:
+        return {"emoji": "⚡", "label": "Blazing"}
+    if streak >= 3:
+        return {"emoji": "🔥", "label": "On Fire"}
+    if streak >= 1:
+        return {"emoji": "✨", "label": "Spark"}
+    return {"emoji": "", "label": "No streak"}
+
+
+# ==================== PREMIUM PACKAGES (infra only — all content free for MVP) ====================
+PACKAGES = {
+    "supporter": {"name": "Supporter", "amount": 4.99, "currency": "usd",
+                  "tagline": "Back the arena", "perks": ["Supporter badge", "Our eternal gratitude"]},
+    "pro_monthly": {"name": "PromptVeer Pro", "amount": 9.99, "currency": "usd",
+                    "tagline": "Monthly membership", "perks": ["Unlock premium bundles", "Pro warrior badge", "Early access to new packs"]},
+    "lifetime": {"name": "Lifetime Access", "amount": 49.99, "currency": "usd",
+                 "tagline": "One-time, forever", "perks": ["All premium bundles forever", "Founding warrior badge", "Priority support"]},
+}

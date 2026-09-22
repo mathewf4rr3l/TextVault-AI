@@ -55,15 +55,17 @@ Ranks 1–10: Ghatotkach → Satyaki → Bhagadatta → Abhimanyu → Bhisma →
 ---
 
 ## Backlog / Next
-### P1
-- [ ] Stripe paywall **infrastructure** (build now, keep all prompts free for MVP) — MUST use integration_expert
-- [ ] Leaderboard screen in UI (endpoint exists)
-- [ ] Prompt Collections & Trending as dedicated surfaces
+### Done this round
+- [x] Stripe paywall **infrastructure** (emergentintegrations StripeCheckout; server-side pricing; transactions collection; webhook). All content free. `STRIPE_API_KEY=sk_test_emergent` is a deploy-time placeholder → `PAYMENTS_ENABLED=false` in preview, checkout returns a graceful 503; real key injected at publish.
+- [x] Leaderboard UI (`app/leaderboard.tsx`, `GET /api/leaderboard`) — podium, rank medals, entry points on Discover + Profile
+- [x] Copy Streaks — `POST /api/prompts/{id}/copy` daily streak + bonus points (badges: Spark/On Fire/Blazing/Legendary); score folds in bonus; streak card on Profile; toast on prompt detail
+- [x] Curated Collections — `GET /api/collections`, `GET /api/collections/{id}`; swipeable packs on Discover + `app/collection/[id].tsx`
 
 ### P2 (Future)
-- [ ] Paid premium prompts / bundles (activate paywall)
+- [ ] Activate paywall: gate premium prompts/bundles once a real Stripe key is live (entitlement is intentionally separate from payment_status)
 - [ ] Ratings/reviews, comments
 - [ ] Report/moderation for user submissions
+- [ ] Prompt Collections as a dedicated tab/surface
 
 ---
 

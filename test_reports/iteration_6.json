@@ -1,0 +1,36 @@
+{
+  "summary": "PromptVeer iteration 6 — 28/28 backend pytest cases PASS covering all 4 new features + core regression. (1) Curated Collections: GET /api/collections returns exactly 8 items with correct shape {id,title,subtitle,emoji,color,count,preview[<=4]}, GET /api/collections/{id} returns full pack sorted by likes desc, /midjourney-mastery correctly filters tool==Midjourney, unknown id returns 404. (2) Copy Streaks: POST /api/prompts/{id}/copy returns {copies,streak,points_awarded,badge{emoji,label}}; first copy of the day awards >=2 points and increments streak, subsequent same-day copies award 0 additional points with streak unchanged; copies counter increments; unauth=401, unknown prompt=404. (3) Profile stats: GET /api/profile now includes copy_streak, longest_streak, total_copies, bonus_points, streak_badge{emoji,label}; score exactly equals uploads*10 + likes*3 + shares*5 + bonus_points. (4) Payments infra: GET /api/payments/packages returns enabled=false with 3 packages (supporter/pro_monthly/lifetime) each with name/amount/currency/tagline/perks; POST /api/payments/checkout returns HTTP 503 with 'publish/activate' detail (EXPECTED — placeholder Stripe key); checkout requires auth (401); status endpoint returns 404 for unknown sessions. (5) Leaderboard: GET /api/leaderboard returns list sorted by score desc with rank{level,name,medal,color}. (6) Regression: /api/health, /api/prompts (default, filter=tool, sort=newest, sort=top), /api/discover, POST /api/prompts (auth), like toggle on/off, share — all green. No backend issues found. Frontend not tested per request.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_promptveer_v2.py",
+    "/app/test_reports/pytest/pytest_results_iter6.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py:762 payment_status ownership check reads current_user.get('origin', ...) which is never set on the user document — the argument is only used to construct a webhook URL for the StripeCheckout status call, so it silently defaults to 'https://example.com'. Harmless while payments are disabled, but consider passing origin_url from the client (or persisting it on the transaction) so the status endpoint uses the correct webhook base when payments go live.",
+    "server.py:534 copy_prompt increments 'copies' via $inc but the prompts documents seeded in seed_prompts_if_empty() never initialise a 'copies' field. MongoDB $inc handles missing fields correctly (starts at 0), but the seeded docs won't have the key until the first copy happens, which means older /api/prompts responses can omit it. Frontend should treat missing copies as 0.",
+    "server.py:762 test_status_ownership_403 could not seed a real cross-user transaction from the public API (checkout returns 503 in preview), so the 403 code path is verified by inspection only. When STRIPE_API_KEY is set in prod, add an integration test that creates a session with user A and hits /status/{session_id} as user B to confirm 403.",
+    "Iteration-5 frontend items still open (no testIDs anywhere, Share on web preview, router.back() on /submit) — carried over, not re-tested this round per 'backend only' scope."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_promptveer_v2.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (28/28)",
+    "frontend": "not tested (backend-only scope)"
+  },
+  "seed_data_creation": "None. Tests create a guest user (device_id prefixed TEST_) and one TEST_prompt_* that is deleted at end of the regression test. No permanent seed data added.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Reusable pytest file lives at /app/backend/tests/test_promptveer_v2.py. It is idempotent and uses fresh guest tokens each run. When STRIPE_API_KEY becomes a real key in production, test_checkout_503_when_disabled will start failing — that is intentional; update that test to assert 200 + a valid session_id/url, and enable the seeded cross-user 403 assertion in test_status_ownership_403. Base URL is read from EXPO_PUBLIC_BACKEND_URL (falls back to EXPO_BACKEND_URL then the public preview URL).",
+  "rca_of_issue": "N/A — no bugs found this iteration."
+}

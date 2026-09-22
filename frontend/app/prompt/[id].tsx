@@ -20,6 +20,7 @@ export default function PromptDetail() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [streakMsg, setStreakMsg] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -34,6 +35,13 @@ export default function PromptDetail() {
     if (Platform.OS !== 'web') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
+    try {
+      const r = await api.copyPrompt(prompt.id);
+      if (r.points_awarded > 0) {
+        setStreakMsg(`${r.badge.emoji} ${r.streak}-day streak! +${r.points_awarded} pts`);
+        setTimeout(() => setStreakMsg(''), 3500);
+      }
+    } catch {}
   };
 
   const onLike = async () => {
@@ -121,6 +129,11 @@ export default function PromptDetail() {
       </ScrollView>
 
       {/* Sticky action bar */}
+      {streakMsg ? (
+        <View style={[styles.streakToast, { bottom: insets.bottom + 84 }]}>
+          <Text style={styles.streakToastText}>{streakMsg}</Text>
+        </View>
+      ) : null}
       <View style={[styles.actionBar, { paddingBottom: insets.bottom + 10 }]}>
         <Pressable style={styles.iconBtn} onPress={onLike} testID="detail-like-btn">
           <Text style={styles.iconEmoji}>{prompt.is_liked ? '❤️' : '🤍'}</Text>
@@ -173,4 +186,10 @@ const styles = StyleSheet.create({
   iconCount: { color: COLORS.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 2 },
   copyBtn: { flex: 1, backgroundColor: COLORS.gold, paddingVertical: 15, borderRadius: RADIUS.lg, alignItems: 'center' },
   copyBtnText: { color: '#2A1400', fontWeight: '800', fontSize: 15.5 },
+  streakToast: {
+    position: 'absolute', left: SPACING.md, right: SPACING.md, backgroundColor: COLORS.purple,
+    borderRadius: RADIUS.pill, paddingVertical: 10, alignItems: 'center',
+    borderWidth: 1, borderColor: COLORS.gold,
+  },
+  streakToastText: { color: COLORS.white, fontWeight: '800', fontSize: 14 },
 });

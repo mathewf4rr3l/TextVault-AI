@@ -30,6 +30,7 @@ export interface Prompt {
   author_name: string;
   likes: number;
   shares: number;
+  copies?: number;
   is_liked?: boolean;
   created_at: string;
   updated_at: string;
@@ -64,10 +65,47 @@ export interface ProfileStats {
   likes_received: number;
   shares_received: number;
   score: number;
+  copy_streak: number;
+  longest_streak: number;
+  total_copies: number;
+  bonus_points: number;
+  streak_badge: { emoji: string; label: string };
   rank: RankInfo;
   next_rank: RankInfo | null;
   progress: number;
   points_to_next: number;
+}
+
+export interface CollectionPreview {
+  id: string;
+  title: string;
+  subtitle: string;
+  emoji: string;
+  color: string;
+  count: number;
+  preview: Prompt[];
+}
+
+export interface CollectionDetail extends Omit<CollectionPreview, 'preview'> {
+  prompts: Prompt[];
+}
+
+export interface PackageInfo {
+  id: string;
+  name: string;
+  amount: number;
+  currency: string;
+  tagline: string;
+  perks: string[];
+}
+
+export interface LeaderboardEntry {
+  user_id: string;
+  name: string;
+  picture: string;
+  score: number;
+  prompts_uploaded: number;
+  rank: RankInfo;
 }
 
 export interface Profile {
@@ -155,14 +193,30 @@ export const api = {
     call<{ is_liked: boolean; likes: number }>(`/api/prompts/${id}/like`, { method: 'POST' }),
   sharePrompt: (id: string) =>
     call<{ shares: number }>(`/api/prompts/${id}/share`, { method: 'POST' }),
+  copyPrompt: (id: string) =>
+    call<{ copies: number; streak: number; points_awarded: number; badge: { emoji: string; label: string } }>(
+      `/api/prompts/${id}/copy`, { method: 'POST' }),
+
+  // Collections
+  getCollections: () => call<CollectionPreview[]>('/api/collections'),
+  getCollection: (id: string) => call<CollectionDetail>(`/api/collections/${id}`),
+
+  // Payments (infra)
+  getPackages: () => call<{ enabled: boolean; packages: PackageInfo[] }>('/api/payments/packages'),
+  createCheckout: (packageId: string, originUrl: string) =>
+    call<{ url: string; session_id: string }>('/api/payments/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ package_id: packageId, origin_url: originUrl }),
+    }),
+  getPaymentStatus: (sessionId: string) =>
+    call<{ session_id: string; status: string; payment_status: string; paid: boolean }>(
+      `/api/payments/status/${sessionId}`),
 
   // Library / profile
   getLibrary: (type: 'uploads' | 'liked') =>
     call<Prompt[]>(`/api/library?type=${type}`),
   getProfile: () => call<Profile>('/api/profile'),
-  getLeaderboard: () =>
-    call<{ user_id: string; name: string; picture: string; score: number; prompts_uploaded: number; rank: RankInfo }[]>(
-      '/api/leaderboard'),
+  getLeaderboard: () => call<LeaderboardEntry[]>('/api/leaderboard'),
 };
 
 export function timeAgo(dateStr: string): string {

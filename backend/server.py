@@ -14,13 +14,17 @@ from collections import defaultdict
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 from taxonomy import (
     CATEGORIES, TOOLS, INDUSTRIES, DIFFICULTIES, CONTENT_TYPES, RANKS,
-    compute_score, rank_for_score, next_rank_for_score,
+    COLLECTIONS, COLLECTIONS_BY_ID, PACKAGES,
+    compute_score, rank_for_score, next_rank_for_score, streak_badge,
 )
 from seed_data import SEED_PROMPTS
+from emergentintegrations.payments.stripe.checkout import (
+    StripeCheckout, CheckoutSessionRequest,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -142,7 +146,7 @@ def user_to_dict(user: dict) -> dict:
 # ==================== GAMIFICATION ====================
 
 async def recompute_gamification(user_id: str) -> dict:
-    """Recompute a user's stats/rank from their prompts and persist it."""
+    """Recompute a user's stats/rank from their prompts + accrued bonus points."""
     uploads = await db.prompts.count_documents({"author_id": user_id})
     agg = await db.prompts.aggregate([
         {"$match": {"author_id": user_id}},
@@ -150,7 +154,9 @@ async def recompute_gamification(user_id: str) -> dict:
     ]).to_list(1)
     likes_received = agg[0]["likes"] if agg else 0
     shares_received = agg[0]["shares"] if agg else 0
-    score = compute_score(uploads, likes_received, shares_received)
+    existing = await db.gamification.find_one({"user_id": user_id}, {"_id": 0, "bonus_points": 1})
+    bonus = (existing or {}).get("bonus_points", 0)
+    score = compute_score(uploads, likes_received, shares_received) + bonus
     rank = rank_for_score(score)
     stats = {
         "user_id": user_id,
@@ -164,7 +170,7 @@ async def recompute_gamification(user_id: str) -> dict:
         "updated_at": datetime.now(timezone.utc),
     }
     await db.gamification.update_one({"user_id": user_id}, {"$set": stats}, upsert=True)
-    return stats
+    return await db.gamification.find_one({"user_id": user_id}, {"_id": 0})
 
 
 def build_profile_stats(stats: dict) -> dict:
@@ -182,6 +188,11 @@ def build_profile_stats(stats: dict) -> dict:
         "likes_received": stats.get("likes_received", 0),
         "shares_received": stats.get("shares_received", 0),
         "score": score,
+        "copy_streak": stats.get("copy_streak", 0),
+        "longest_streak": stats.get("longest_streak", 0),
+        "total_copies": stats.get("total_copies", 0),
+        "bonus_points": stats.get("bonus_points", 0),
+        "streak_badge": streak_badge(stats.get("copy_streak", 0)),
         "rank": {"level": rank["level"], "name": rank["name"], "medal": rank["medal"],
                  "color": rank["color"], "title": rank["title"]},
         "next_rank": ({"level": nxt["level"], "name": nxt["name"], "medal": nxt["medal"],
@@ -520,6 +531,61 @@ async def share_prompt(prompt_id: str, current_user: dict = Depends(get_current_
     return {"shares": updated["shares"]}
 
 
+@api_router.post("/prompts/{prompt_id}/copy")
+async def copy_prompt(prompt_id: str, current_user: dict = Depends(get_current_user)):
+    """Record a copy event and update the copier's daily streak + bonus points."""
+    doc = await db.prompts.find_one({"id": prompt_id})
+    if not doc:
+        raise HTTPException(404, "Prompt not found")
+    await db.prompts.update_one({"id": prompt_id}, {"$inc": {"copies": 1, "trending_score": 1}})
+
+    uid = current_user["user_id"]
+    g = await db.gamification.find_one({"user_id": uid}) or {}
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    last = g.get("last_copy_date")
+    streak = g.get("copy_streak", 0)
+    longest = g.get("longest_streak", 0)
+    bonus = g.get("bonus_points", 0)
+    total = g.get("total_copies", 0) + 1
+    awarded = 0
+
+    if last != today:
+        streak = streak + 1 if last == yesterday else 1
+        awarded += 2  # base reward for showing up
+        if streak == 3:
+            awarded += 10
+        elif streak == 7:
+            awarded += 25
+        elif streak == 30:
+            awarded += 100
+        bonus += awarded
+        longest = max(longest, streak)
+        last = today
+
+    await db.gamification.update_one(
+        {"user_id": uid},
+        {"$set": {
+            "user_id": uid,
+            "copy_streak": streak,
+            "longest_streak": longest,
+            "last_copy_date": last,
+            "bonus_points": bonus,
+            "total_copies": total,
+        }},
+        upsert=True,
+    )
+    await recompute_gamification(uid)  # folds bonus into score
+
+    updated = await db.prompts.find_one({"id": prompt_id}, {"_id": 0})
+    return {
+        "copies": updated.get("copies", 0),
+        "streak": streak,
+        "points_awarded": awarded,
+        "badge": streak_badge(streak),
+    }
+
+
 # ==================== LIBRARY / PROFILE ====================
 
 @api_router.get("/library")
@@ -573,6 +639,175 @@ async def leaderboard(limit: int = Query(20, ge=1, le=50)):
                      "color": rank["color"]},
         })
     return result
+
+
+# ==================== COLLECTIONS ====================
+
+def _collection_filter(spec: dict) -> dict:
+    q: Dict[str, Any] = {}
+    for k, v in spec.items():
+        q[k] = v
+    return q
+
+
+@api_router.get("/collections")
+async def list_collections(request: Request):
+    user = await get_optional_user(request)
+    uid = user["user_id"] if user else None
+    out = []
+    for c in COLLECTIONS:
+        q = _collection_filter(c["filter"])
+        count = await db.prompts.count_documents(q)
+        preview = await db.prompts.find(q, {"_id": 0}).sort([("likes", -1)]).limit(4).to_list(4)
+        liked = await liked_ids_for(uid, [p["id"] for p in preview])
+        out.append({
+            "id": c["id"], "title": c["title"], "subtitle": c["subtitle"],
+            "emoji": c["emoji"], "color": c["color"], "count": count,
+            "preview": [prompt_to_dict(p, liked) for p in preview],
+        })
+    return out
+
+
+@api_router.get("/collections/{collection_id}")
+async def get_collection(collection_id: str, request: Request):
+    c = COLLECTIONS_BY_ID.get(collection_id)
+    if not c:
+        raise HTTPException(404, "Collection not found")
+    q = _collection_filter(c["filter"])
+    docs = await db.prompts.find(q, {"_id": 0}).sort([("likes", -1)]).limit(100).to_list(100)
+    user = await get_optional_user(request)
+    liked = await liked_ids_for(user["user_id"] if user else None, [d["id"] for d in docs])
+    return {
+        "id": c["id"], "title": c["title"], "subtitle": c["subtitle"],
+        "emoji": c["emoji"], "color": c["color"], "count": len(docs),
+        "prompts": [prompt_to_dict(d, liked) for d in docs],
+    }
+
+
+# ==================== PAYMENTS (Stripe infra — all content free for MVP) ====================
+
+class CheckoutRequest(BaseModel):
+    package_id: str
+    origin_url: str = Field(..., max_length=300)
+
+
+STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "")
+PAYMENTS_ENABLED = STRIPE_API_KEY not in ("", "sk_test_emergent")
+
+
+def _stripe_client(origin_url: str) -> StripeCheckout:
+    # /api routes to this backend via ingress, so the webhook lives under the app origin.
+    webhook_url = f"{origin_url.rstrip('/')}/api/webhook/stripe"
+    return StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+
+
+@api_router.get("/payments/packages")
+async def payment_packages():
+    return {
+        "enabled": PAYMENTS_ENABLED,
+        "packages": [{"id": pid, **{k: v for k, v in pkg.items()}} for pid, pkg in PACKAGES.items()],
+    }
+
+
+@api_router.post("/payments/checkout")
+async def create_checkout(body: CheckoutRequest, current_user: dict = Depends(get_current_user)):
+    if not PAYMENTS_ENABLED:
+        raise HTTPException(503, "Payments activate after the app is published.")
+    pkg = PACKAGES.get(body.package_id)
+    if not pkg:
+        raise HTTPException(400, "Unknown package")
+    # Amount is chosen SERVER-SIDE from the package table — never from the client.
+    amount = float(pkg["amount"])
+    currency = pkg["currency"]
+    origin = body.origin_url.rstrip("/")
+    success_url = f"{origin}/upgrade?status=success"
+    cancel_url = f"{origin}/upgrade?status=cancel"
+    try:
+        stripe = _stripe_client(origin)
+        req = CheckoutSessionRequest(
+            amount=amount,
+            currency=currency,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"user_id": current_user["user_id"], "package_id": body.package_id},
+        )
+        session = await stripe.create_checkout_session(req)
+    except Exception as e:
+        logger.error(f"Stripe checkout error: {e}")
+        raise HTTPException(502, "Could not start checkout")
+
+    await db.payment_transactions.update_one(
+        {"session_id": session.session_id},
+        {"$setOnInsert": {
+            "session_id": session.session_id,
+            "user_id": current_user["user_id"],
+            "package_id": body.package_id,
+            "amount": amount,
+            "currency": currency,
+            "payment_status": "initiated",
+            "status": "open",
+            "created_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    return {"url": session.url, "session_id": session.session_id}
+
+
+@api_router.get("/payments/status/{session_id}")
+async def payment_status(session_id: str, current_user: dict = Depends(get_current_user)):
+    txn = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if not txn:
+        raise HTTPException(404, "Transaction not found")
+    if txn["user_id"] != current_user["user_id"]:
+        raise HTTPException(403, "Not your transaction")
+    try:
+        stripe = _stripe_client(current_user.get("origin", "https://example.com"))
+        status = await stripe.get_checkout_status(session_id)
+    except Exception as e:
+        logger.error(f"Stripe status error: {e}")
+        raise HTTPException(502, "Could not fetch status")
+
+    # Only update once; do not re-process an already-paid transaction.
+    if txn.get("payment_status") != "paid":
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "payment_status": status.payment_status,
+                "status": status.status,
+                "amount_total": getattr(status, "amount_total", None),
+                "last_checked_at": datetime.now(timezone.utc),
+            }},
+        )
+    return {
+        "session_id": session_id,
+        "status": status.status,
+        "payment_status": status.payment_status,
+        "paid": status.payment_status == "paid",
+    }
+
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    sig = request.headers.get("Stripe-Signature")
+    try:
+        stripe = _stripe_client(os.environ.get("FRONTEND_URL", "https://example.com"))
+        event = await stripe.handle_webhook(body, sig)
+    except Exception as e:
+        logger.error(f"Stripe webhook error: {e}")
+        raise HTTPException(400, "Invalid webhook")
+
+    session_id = getattr(event, "session_id", None)
+    if session_id:
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {
+                "payment_status": getattr(event, "payment_status", None),
+                "status": getattr(event, "status", None),
+                "webhook_at": datetime.now(timezone.utc),
+            }},
+        )
+    return {"received": True}
 
 
 # ==================== APP SETUP ====================
@@ -658,6 +893,8 @@ async def startup():
         await db.prompt_likes.create_index([("user_id", 1), ("prompt_id", 1)], unique=True)
         await db.gamification.create_index("user_id", unique=True)
         await db.gamification.create_index([("score", -1)])
+        await db.payment_transactions.create_index("session_id", unique=True)
+        await db.payment_transactions.create_index([("user_id", 1), ("created_at", -1)])
         logger.info("DB indexes created")
     except Exception as e:
         logger.warning(f"Index creation warning: {e}")

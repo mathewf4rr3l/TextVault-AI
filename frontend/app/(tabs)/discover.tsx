@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
-import { api, Prompt } from '../../utils/api';
+import { api, Prompt, CollectionPreview } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useTaxonomy, categoryEmojiMap } from '../../src/lib/taxonomy';
 import PromptCard from '../../src/components/PromptCard';
@@ -25,13 +25,15 @@ export default function Discover() {
   const taxonomy = useTaxonomy();
   const emojiMap = categoryEmojiMap(taxonomy);
   const [data, setData] = useState<DiscoverData | null>(null);
+  const [collections, setCollections] = useState<CollectionPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const d = await api.discover();
+      const [d, c] = await Promise.all([api.discover(), api.getCollections()]);
       setData(d);
+      setCollections(c);
     } catch {}
     finally { setLoading(false); }
   }, []);
@@ -80,6 +82,39 @@ export default function Discover() {
             <Text style={styles.submitBtnText}>+ Submit</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Quick actions */}
+        <View style={styles.quickRow}>
+          <TouchableOpacity style={styles.quickBtn} onPress={() => router.push('/leaderboard' as any)} testID="leaderboard-nav-btn">
+            <Text style={styles.quickText}>🏆 Leaderboard</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.quickBtn, styles.quickBtnGold]} onPress={() => router.push('/upgrade' as any)} testID="pro-nav-btn">
+            <Text style={[styles.quickText, styles.quickTextGold]}>👑 Go Pro</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Collections */}
+        <SectionHeader title="⭐ Curated Collections" />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: SPACING.md, gap: 12 }}
+        >
+          {collections.map((c) => (
+            <Pressable
+              key={c.id}
+              style={[styles.collectionCard, { borderColor: c.color, backgroundColor: `${c.color}1F` }]}
+              onPress={() => router.push(`/collection/${c.id}` as any)}
+            >
+              <Text style={styles.collectionEmoji}>{c.emoji}</Text>
+              <Text style={styles.collectionTitle} numberOfLines={2}>{c.title}</Text>
+              <Text style={styles.collectionSub} numberOfLines={1}>{c.subtitle}</Text>
+              <View style={[styles.collectionCount, { backgroundColor: c.color }]}>
+                <Text style={styles.collectionCountText}>{c.count} prompts</Text>
+              </View>
+            </Pressable>
+          ))}
+        </ScrollView>
 
         {/* Trending */}
         <SectionHeader title="🔥 Trending Now" onSeeAll={() => router.push('/(tabs)/browse' as any)} />
@@ -160,6 +195,23 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.gold, paddingHorizontal: 16, paddingVertical: 10, borderRadius: RADIUS.pill,
   },
   submitBtnText: { color: '#2A1400', fontWeight: '800', fontSize: 14 },
+  quickRow: { flexDirection: 'row', gap: 10, paddingHorizontal: SPACING.md, marginBottom: SPACING.lg },
+  quickBtn: {
+    flex: 1, backgroundColor: COLORS.card, borderRadius: RADIUS.md, paddingVertical: 12,
+    alignItems: 'center', borderWidth: 1, borderColor: COLORS.border,
+  },
+  quickBtnGold: { borderColor: COLORS.gold, backgroundColor: COLORS.goldSoft },
+  quickText: { color: COLORS.white, fontWeight: '700', fontSize: 13.5 },
+  quickTextGold: { color: COLORS.gold },
+  collectionCard: {
+    width: 160, borderRadius: RADIUS.lg, borderWidth: 1, padding: SPACING.md, gap: 6, minHeight: 150,
+    justifyContent: 'space-between',
+  },
+  collectionEmoji: { fontSize: 30 },
+  collectionTitle: { color: COLORS.white, fontSize: 15, fontWeight: '800' },
+  collectionSub: { color: COLORS.textSecondary, fontSize: 12 },
+  collectionCount: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
+  collectionCountText: { color: '#1A0E2E', fontSize: 11, fontWeight: '800' },
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: SPACING.md, marginTop: SPACING.sm, marginBottom: SPACING.md,

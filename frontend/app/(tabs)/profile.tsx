@@ -86,6 +86,17 @@ export default function ProfileScreen() {
         <StatCard label="Shares" value={stats.shares_received} emoji="↗️" />
       </View>
 
+      {/* Streak card */}
+      <View style={styles.streakCard}>
+        <Text style={styles.streakEmoji}>{stats.streak_badge.emoji || '🔥'}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.streakTitle}>{stats.copy_streak}-day copy streak</Text>
+          <Text style={styles.streakSub}>
+            {stats.streak_badge.label} · best {stats.longest_streak} days · {stats.total_copies} copies
+          </Text>
+        </View>
+      </View>
+
       {/* Rank ladder */}
       <Text style={styles.sectionTitle}>⚔️ Warrior Ranks</Text>
       <View style={styles.ladder}>
@@ -109,6 +120,12 @@ export default function ProfileScreen() {
 
       {/* Actions */}
       <View style={{ paddingHorizontal: SPACING.md, marginTop: SPACING.lg, gap: 12 }}>
+        <TouchableOpacity style={styles.ctaBtn} onPress={() => router.push('/leaderboard' as any)}>
+          <Text style={styles.ctaText}>🏆 View Leaderboard</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.ctaBtn, styles.ctaGold]} onPress={() => router.push('/upgrade' as any)}>
+          <Text style={[styles.ctaText, styles.ctaTextGold]}>👑 PromptVeer Pro</Text>
+        </TouchableOpacity>
         {isGuest && (
           <TouchableOpacity style={styles.googleBtn} onPress={() => router.push('/sign-in' as any)}>
             <View style={styles.googleIcon}><Text style={styles.googleLetter}>G</Text></View>
@@ -163,6 +180,21 @@ const styles = StyleSheet.create({
   statValue: { color: COLORS.white, fontSize: 22, fontWeight: '900' },
   statLabel: { color: COLORS.textMuted, fontSize: 12, fontWeight: '600' },
   sectionTitle: { color: COLORS.white, fontSize: 18, fontWeight: '800', paddingHorizontal: SPACING.md, marginTop: SPACING.lg, marginBottom: SPACING.md },
+  streakCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14, marginHorizontal: SPACING.md,
+    marginTop: SPACING.md, backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.gold,
+  },
+  streakEmoji: { fontSize: 32 },
+  streakTitle: { color: COLORS.white, fontSize: 16, fontWeight: '800' },
+  streakSub: { color: COLORS.textSecondary, fontSize: 12.5, marginTop: 2 },
+  ctaBtn: {
+    backgroundColor: COLORS.card, borderRadius: RADIUS.lg, paddingVertical: 15, alignItems: 'center',
+    borderWidth: 1, borderColor: COLORS.border,
+  },
+  ctaGold: { borderColor: COLORS.gold, backgroundColor: COLORS.goldSoft },
+  ctaText: { color: COLORS.white, fontWeight: '800', fontSize: 15 },
+  ctaTextGold: { color: COLORS.gold },
   ladder: { marginHorizontal: SPACING.md, gap: 8 },
   ladderRow: {
     flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: COLORS.card,
