@@ -86,6 +86,7 @@ export interface CollectionPreview {
   emoji: string;
   color: string;
   count: number;
+  is_following?: boolean;
   preview: Prompt[];
 }
 
@@ -112,10 +113,21 @@ export interface LeaderboardEntry {
 }
 
 export interface Review {
+  id?: string;
   author_name: string;
   stars: number;
   review: string;
+  helpful_count?: number;
+  is_helpful?: boolean;
   created_at: string;
+}
+
+export interface WeeklyWarrior {
+  user_id: string;
+  name: string;
+  picture: string;
+  weekly_score: number;
+  rank: RankInfo;
 }
 
 export interface StreakStatus {
@@ -140,6 +152,7 @@ export interface PromptFilters {
   content_type?: string;
   use_case?: string;
   q?: string;
+  min_rating?: number;
   sort?: 'trending' | 'newest' | 'top' | 'top_rated';
   limit?: number;
   skip?: number;
@@ -218,11 +231,16 @@ export const api = {
     call<{ avg_rating: number; rating_count: number; my_rating: number }>(
       `/api/prompts/${id}/rate`, { method: 'POST', body: JSON.stringify({ stars, review }) }),
   getReviews: (id: string) => call<Review[]>(`/api/prompts/${id}/reviews`),
+  markHelpful: (ratingId: string) =>
+    call<{ is_helpful: boolean; helpful_count: number }>(`/api/reviews/${ratingId}/helpful`, { method: 'POST' }),
   getStreak: () => call<StreakStatus>('/api/streak'),
 
   // Collections
   getCollections: () => call<CollectionPreview[]>('/api/collections'),
   getCollection: (id: string) => call<CollectionDetail>(`/api/collections/${id}`),
+  followCollection: (id: string) =>
+    call<{ is_following: boolean }>(`/api/collections/${id}/follow`, { method: 'POST' }),
+  getWeeklyWarriors: () => call<WeeklyWarrior[]>('/api/weekly-warriors'),
 
   // Payments (infra)
   getPackages: () => call<{ enabled: boolean; packages: PackageInfo[] }>('/api/payments/packages'),
@@ -236,7 +254,7 @@ export const api = {
       `/api/payments/status/${sessionId}`),
 
   // Library / profile
-  getLibrary: (type: 'uploads' | 'liked') =>
+  getLibrary: (type: 'uploads' | 'liked' | 'following') =>
     call<Prompt[]>(`/api/library?type=${type}`),
   getProfile: () => call<Profile>('/api/profile'),
   getLeaderboard: () => call<LeaderboardEntry[]>('/api/leaderboard'),

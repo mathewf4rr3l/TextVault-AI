@@ -29,6 +29,7 @@ export default function Browse() {
   const [sort, setSort] = useState<PromptFilters['sort']>((params.sort as any) || 'trending');
   const [difficulty, setDifficulty] = useState<string>('');
   const [tool, setTool] = useState<string>('');
+  const [minRating, setMinRating] = useState<number>(0);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -44,13 +45,14 @@ export default function Browse() {
         category: category === 'All' ? undefined : category,
         difficulty: difficulty || undefined,
         tool: tool || undefined,
+        min_rating: minRating || undefined,
         sort,
         limit: 50,
       });
       setPrompts(data);
     } catch {}
     finally { setLoading(false); }
-  }, [category, difficulty, tool, sort]);
+  }, [category, difficulty, tool, minRating, sort]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -87,6 +89,8 @@ export default function Browse() {
           <Chip key={d} label={d} active={difficulty === d}
             onPress={() => setDifficulty(difficulty === d ? '' : d)} />
         ))}
+        <Chip label="⭐ 4+" active={minRating === 4} onPress={() => setMinRating(minRating === 4 ? 0 : 4)} />
+        <Chip label="⭐ 3+" active={minRating === 3} onPress={() => setMinRating(minRating === 3 ? 0 : 3)} />
       </ScrollView>
 
       {/* Tool chips */}

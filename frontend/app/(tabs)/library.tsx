@@ -15,11 +15,11 @@ export default function Library() {
   const router = useRouter();
   const taxonomy = useTaxonomy();
   const emojiMap = categoryEmojiMap(taxonomy);
-  const [tab, setTab] = useState<'uploads' | 'liked'>('uploads');
+  const [tab, setTab] = useState<'uploads' | 'liked' | 'following'>('uploads');
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async (which: 'uploads' | 'liked') => {
+  const load = useCallback(async (which: 'uploads' | 'liked' | 'following') => {
     setLoading(true);
     try {
       const data = await api.getLibrary(which);
@@ -51,10 +51,10 @@ export default function Library() {
       </View>
 
       <View style={styles.tabs}>
-        {(['uploads', 'liked'] as const).map((t) => (
+        {(['uploads', 'liked', 'following'] as const).map((t) => (
           <Pressable key={t} style={[styles.tab, tab === t && styles.tabActive]} onPress={() => setTab(t)}>
             <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-              {t === 'uploads' ? 'My Prompts' : 'Liked'}
+              {t === 'uploads' ? 'My Prompts' : t === 'liked' ? 'Liked' : 'Following'}
             </Text>
           </Pressable>
         ))}
@@ -78,15 +78,22 @@ export default function Library() {
           )}
           ListEmptyComponent={
             <View style={styles.emptyBox}>
-              <Text style={styles.emptyEmoji}>{tab === 'uploads' ? '📤' : '🤍'}</Text>
+              <Text style={styles.emptyEmoji}>{tab === 'uploads' ? '📤' : tab === 'liked' ? '🤍' : '⭐'}</Text>
               <Text style={styles.empty}>
                 {tab === 'uploads'
                   ? 'You haven\u2019t submitted any prompts yet.\nShare your best prompt to climb the ranks!'
-                  : 'No liked prompts yet.\nTap the heart on prompts you love.'}
+                  : tab === 'liked'
+                  ? 'No liked prompts yet.\nTap the heart on prompts you love.'
+                  : 'You\u2019re not following any packs yet.\nFollow a collection to see its newest prompts here.'}
               </Text>
               {tab === 'uploads' && (
                 <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/submit' as any)}>
                   <Text style={styles.emptyBtnText}>Submit a Prompt</Text>
+                </TouchableOpacity>
+              )}
+              {tab === 'following' && (
+                <TouchableOpacity style={styles.emptyBtn} onPress={() => router.push('/(tabs)/collections' as any)}>
+                  <Text style={styles.emptyBtnText}>Browse Packs</Text>
                 </TouchableOpacity>
               )}
             </View>

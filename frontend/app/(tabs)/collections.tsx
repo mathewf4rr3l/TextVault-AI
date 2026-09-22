@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable, RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { api, CollectionPreview } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 
@@ -19,7 +19,7 @@ export default function Collections() {
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
@@ -49,8 +49,11 @@ export default function Collections() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>{item.title}</Text>
                 <Text style={styles.cardSub} numberOfLines={1}>{item.subtitle}</Text>
-                <View style={[styles.countPill, { backgroundColor: item.color }]}>
-                  <Text style={styles.countText}>{item.count} prompts</Text>
+                <View style={styles.cardMetaRow}>
+                  <View style={[styles.countPill, { backgroundColor: item.color }]}>
+                    <Text style={styles.countText}>{item.count} prompts</Text>
+                  </View>
+                  {item.is_following && <Text style={styles.followingTag}>★ Following</Text>}
                 </View>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -75,7 +78,9 @@ const styles = StyleSheet.create({
   emoji: { fontSize: 28 },
   cardTitle: { color: COLORS.white, fontSize: 16.5, fontWeight: '800' },
   cardSub: { color: COLORS.textSecondary, fontSize: 13, marginTop: 2 },
-  countPill: { alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 10, paddingVertical: 3, borderRadius: RADIUS.pill },
+  countPill: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: RADIUS.pill },
   countText: { color: '#1A0E2E', fontSize: 11, fontWeight: '800' },
+  cardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8 },
+  followingTag: { color: COLORS.gold, fontSize: 11.5, fontWeight: '800' },
   chevron: { color: COLORS.textMuted, fontSize: 28, fontWeight: '300' },
 });

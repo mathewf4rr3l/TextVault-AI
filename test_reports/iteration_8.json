@@ -1,0 +1,42 @@
+{
+  "summary": "PromptVeer iteration 8 — 26/26 backend pytest PASS + frontend visual verification PASS for all 4 new features. (1) min_rating filter: GET /api/prompts?min_rating=4|3 returns only prompts with avg_rating>=n; invalid value (99) => 422; default (no min_rating) still includes 0-rated. (2) Weekly Warriors: GET /api/weekly-warriors returns top contributors by last-7-day activity (uploads*10 + likes*3), excludes 'promptveer_official', each entry has weekly_score>0 and rank medal; verified an authed upload from a fresh guest appears in the list. (3) Collection Following: POST /api/collections/{id}/follow toggles is_following true/false (200 with {is_following}), 404 for unknown id, 401 unauth; GET /api/collections and GET /api/collections/{id} both include is_following per user; GET /api/library?type=following returns newest prompts from followed packs sorted by created_at desc, [] when none followed, 401 unauth. (4) Review Reactions: POST /api/prompts/{id}/rate now persists a stable uuid 'id' on each review; GET /api/prompts/{id}/reviews returns id + helpful_count + is_helpful, sorted by helpful_count desc then newest, never leaks user_id; POST /api/reviews/{rating_id}/helpful toggles vote and increments/decrements helpful_count (auto-clamped at 0), 404 for unknown rating_id, 401 unauth; two-voter test confirmed a review with 2 helpful votes ranks above one with 0. (5) Curated library: /api/discover shows 30 categories totaling 364+ prompts; AI Video prompts have content_type=Video, AI Tool-Specific have tool set, Industry-Specific have industry set; (title,category) unique across the 300 curated rows => idempotent (verified across 3+ startups with no dupes). (6) Regressions: like/share/copy, submit prompt, top_rated sort (avg_rating desc verified), collections=8, leaderboard all still work. FRONTEND: Weekly Warriors row rendered on Discover with #1/#2 medals and '+N pts' (verified after backend tests uploaded prompts); Browse '⭐ 4+' and '⭐ 3+' chips visible and functional (55 unfiltered => 19 with 4+); Packs tab lists 8 collections; collection detail Follow toggle switches '+ Follow pack' <-> '✓ Following' correctly; Library third tab 'Following' loads 68 prompts from the followed pack; Prompt detail shows 'Rate this prompt' interactive stars + review input; Helpful buttons render (testID=helpful-{i}) on reviewed prompts. Minor UX nit: Packs list does not auto-refresh after following on detail screen (see frontend_issues).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Collections tab list", "issue": "After following a pack on the detail screen and navigating back, the '★ Following' badge on the pack card does NOT appear until pull-to-refresh or tab remount. Root cause: collections.tsx uses useEffect(load,[]) instead of useFocusEffect from expo-router. Reference: /app/frontend/app/(tabs)/collections.tsx:22", "testID": "collection-<id>", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_promptveer_v4.py",
+    "/app/test_reports/pytest/pytest_results_iter8.xml"
+  ],
+  "action_items": [
+    "Optional UX polish: in /app/frontend/app/(tabs)/collections.tsx, replace 'useEffect(() => { load(); }, [load])' with 'useFocusEffect(useCallback(() => { load(); }, [load]))' so the '★ Following' badge appears immediately after the user follows a pack from the detail screen. Non-blocking; pull-to-refresh already works.",
+    "(Nit, carried from iter 7) StarRating.tsx interactive Pressables still lack per-star testIDs — Playwright cannot precisely target star N. Fine for now since backend covers the flow."
+  ],
+  "critical_code_review_comments": [
+    "server.py:836 weekly_warriors uses a $lookup on prompt_likes -> prompts (foreignField 'id'). Ensure prompt_likes has a created_at index if traffic grows; currently only unique (user_id, prompt_id) index exists. Fine for MVP volume.",
+    "server.py:717 library ?type=following builds an $or over per-collection filters; if a user follows many collections with overlapping filters (e.g. two Midjourney packs) the same prompt could be returned twice. Consider $unionWith or de-duping on id server-side. Non-blocking today (each collection filter is distinct).",
+    "server.py:660 toggle_helpful returns max(0, helpful_count) but the underlying $inc: -1 can still push the stored value negative if a stale reaction row is deleted from another path. The unique index on (rating_id, user_id) protects the normal flow — acceptable.",
+    "server.py:632 rate_prompt correctly $setOnInsert's the stable 'id' + 'helpful_count' only on first insert, so re-rating preserves the review id and helpful count — verified in tests.",
+    "collections.tsx:22 uses useEffect(load,[]) — should be useFocusEffect so following state stays in sync when the user returns from the detail screen (see frontend_issues)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_promptveer_v4.py (new — 26 tests, 100% pass)"
+  ],
+  "success_rate": {
+    "backend": "100% (26/26)",
+    "frontend": "100% functional for all 4 new features; 1 minor UX refresh nit"
+  },
+  "seed_data_creation": "None permanent. Tests create fresh TEST_iter8_* guest sessions per class (disposable) and add ~3 TEST review rows + 2 TEST uploads to seeded prompts. Ratings/uploads persist under short-lived guest accounts and are harmless — do NOT need cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Regression suite for iteration 8 lives at /app/backend/tests/test_promptveer_v4.py (26 tests). Run alongside test_promptveer_v3.py (iter7) and test_promptveer_v2.py (iter6) for full coverage. All device_ids are TEST_iter8_<class>_<uuid> so runs are idempotent. Notes: (a) The single 'legacy review without id' mentioned in the review request was NOT encountered; the test filter tolerates it via .get('id') checks. (b) Weekly Warriors is populated by test uploads and will remain visible for 7 days from a run — do not treat that as leaked seed data. (c) Collections tab needs useFocusEffect to auto-refresh the Following badge (see action_items).",
+  "rca_of_issue": "N/A — no bugs found this iteration. All 4 features (min_rating filter, Weekly Warriors, Collection Following + Library Following tab, Review Helpful reactions) plus the 300 curated prompts (30x10, idempotent) work end-to-end. Only a minor UX polish item on the Collections tab list refresh."
+}

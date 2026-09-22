@@ -22,6 +22,7 @@ from taxonomy import (
     compute_score, rank_for_score, next_rank_for_score, streak_badge,
 )
 from seed_data import SEED_PROMPTS
+from seed_data_extra import build_extra_prompts
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout, CheckoutSessionRequest,
 )
@@ -355,7 +356,7 @@ async def get_taxonomy():
 
 # ==================== PROMPTS ====================
 
-def _build_prompt_query(category, subcategory, tool, industry, difficulty, content_type, use_case, q):
+def _build_prompt_query(category, subcategory, tool, industry, difficulty, content_type, use_case, q, min_rating=None):
     query: Dict[str, Any] = {}
     if category and category != "All":
         query["category"] = category
@@ -371,6 +372,8 @@ def _build_prompt_query(category, subcategory, tool, industry, difficulty, conte
         query["content_type"] = content_type
     if use_case:
         query["use_case"] = use_case
+    if min_rating:
+        query["avg_rating"] = {"$gte": float(min_rating)}
     if q and q.strip():
         escaped = re.escape(q.strip())
         query["$or"] = [
@@ -394,11 +397,12 @@ async def list_prompts(
     content_type: Optional[str] = Query(None),
     use_case: Optional[str] = Query(None),
     q: Optional[str] = Query(None, max_length=200),
+    min_rating: Optional[float] = Query(None, ge=0, le=5),
     sort: str = Query("trending"),
     limit: int = Query(30, ge=1, le=100),
     skip: int = Query(0, ge=0, le=10000),
 ):
-    query = _build_prompt_query(category, subcategory, tool, industry, difficulty, content_type, use_case, q)
+    query = _build_prompt_query(category, subcategory, tool, industry, difficulty, content_type, use_case, q, min_rating)
     if sort == "newest":
         sort_spec = [("created_at", -1)]
     elif sort == "top":
@@ -616,7 +620,7 @@ async def rate_prompt(prompt_id: str, body: RatingRequest, current_user: dict = 
             "stars": body.stars,
             "review": (body.review or "").strip(),
             "updated_at": datetime.now(timezone.utc),
-        }, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+        }, "$setOnInsert": {"id": uuid.uuid4().hex, "helpful_count": 0, "created_at": datetime.now(timezone.utc)}},
         upsert=True,
     )
     agg = await db.ratings.aggregate([
@@ -630,16 +634,47 @@ async def rate_prompt(prompt_id: str, body: RatingRequest, current_user: dict = 
 
 
 @api_router.get("/prompts/{prompt_id}/reviews")
-async def list_reviews(prompt_id: str, limit: int = Query(30, ge=1, le=100)):
+async def list_reviews(prompt_id: str, request: Request, limit: int = Query(30, ge=1, le=100)):
+    # Most helpful first, then newest
     cursor = db.ratings.find(
         {"prompt_id": prompt_id, "review": {"$ne": ""}}, {"_id": 0, "user_id": 0}
-    ).sort("created_at", -1).limit(limit)
+    ).sort([("helpful_count", -1), ("created_at", -1)]).limit(limit)
     docs = await cursor.to_list(limit)
+    # Which reviews has the current user marked helpful?
+    user = await get_optional_user(request)
+    my_helpful = set()
+    if user and docs:
+        rids = [d.get("id") for d in docs if d.get("id")]
+        reacts = await db.review_reactions.find(
+            {"user_id": user["user_id"], "rating_id": {"$in": rids}}, {"_id": 0, "rating_id": 1}).to_list(len(rids))
+        my_helpful = {r["rating_id"] for r in reacts}
     for d in docs:
         if isinstance(d.get("created_at"), datetime):
             d["created_at"] = d["created_at"].isoformat()
         d.pop("updated_at", None)
+        d.setdefault("helpful_count", 0)
+        d["is_helpful"] = d.get("id") in my_helpful
     return docs
+
+
+@api_router.post("/reviews/{rating_id}/helpful")
+async def toggle_helpful(rating_id: str, current_user: dict = Depends(get_current_user)):
+    rating = await db.ratings.find_one({"id": rating_id})
+    if not rating:
+        raise HTTPException(404, "Review not found")
+    uid = current_user["user_id"]
+    existing = await db.review_reactions.find_one({"rating_id": rating_id, "user_id": uid})
+    if existing:
+        await db.review_reactions.delete_one({"rating_id": rating_id, "user_id": uid})
+        await db.ratings.update_one({"id": rating_id}, {"$inc": {"helpful_count": -1}})
+        is_helpful = False
+    else:
+        await db.review_reactions.insert_one({"rating_id": rating_id, "user_id": uid,
+                                              "created_at": datetime.now(timezone.utc)})
+        await db.ratings.update_one({"id": rating_id}, {"$inc": {"helpful_count": 1}})
+        is_helpful = True
+    updated = await db.ratings.find_one({"id": rating_id}, {"_id": 0, "helpful_count": 1})
+    return {"is_helpful": is_helpful, "helpful_count": max(0, updated.get("helpful_count", 0))}
 
 
 @api_router.get("/streak")
@@ -679,6 +714,16 @@ async def get_library(
         order = {pid: i for i, pid in enumerate(ids)}
         docs.sort(key=lambda d: order.get(d["id"], 9999))
         return [prompt_to_dict(d, set(ids)) for d in docs]
+    if type == "following":
+        followed = await _followed_collection_ids(uid)
+        if not followed:
+            return []
+        or_clauses = [_collection_filter(COLLECTIONS_BY_ID[cid]["filter"]) for cid in followed if cid in COLLECTIONS_BY_ID]
+        if not or_clauses:
+            return []
+        docs = await db.prompts.find({"$or": or_clauses}, {"_id": 0}).sort("created_at", -1).limit(100).to_list(100)
+        liked = await liked_ids_for(uid, [d["id"] for d in docs])
+        return [prompt_to_dict(d, liked) for d in docs]
     # uploads
     docs = await db.prompts.find({"author_id": uid}, {"_id": 0}).sort("created_at", -1).to_list(200)
     liked = await liked_ids_for(uid, [d["id"] for d in docs])
@@ -726,10 +771,16 @@ def _collection_filter(spec: dict) -> dict:
     return q
 
 
+async def _followed_collection_ids(user_id: str) -> set:
+    rows = await db.collection_follows.find({"user_id": user_id}, {"_id": 0, "collection_id": 1}).to_list(50)
+    return {r["collection_id"] for r in rows}
+
+
 @api_router.get("/collections")
 async def list_collections(request: Request):
     user = await get_optional_user(request)
     uid = user["user_id"] if user else None
+    following = await _followed_collection_ids(uid) if uid else set()
     out = []
     for c in COLLECTIONS:
         q = _collection_filter(c["filter"])
@@ -739,6 +790,7 @@ async def list_collections(request: Request):
         out.append({
             "id": c["id"], "title": c["title"], "subtitle": c["subtitle"],
             "emoji": c["emoji"], "color": c["color"], "count": count,
+            "is_following": c["id"] in following,
             "preview": [prompt_to_dict(p, liked) for p in preview],
         })
     return out
@@ -752,12 +804,74 @@ async def get_collection(collection_id: str, request: Request):
     q = _collection_filter(c["filter"])
     docs = await db.prompts.find(q, {"_id": 0}).sort([("likes", -1)]).limit(100).to_list(100)
     user = await get_optional_user(request)
-    liked = await liked_ids_for(user["user_id"] if user else None, [d["id"] for d in docs])
+    uid = user["user_id"] if user else None
+    liked = await liked_ids_for(uid, [d["id"] for d in docs])
+    is_following = False
+    if uid:
+        is_following = bool(await db.collection_follows.find_one({"user_id": uid, "collection_id": collection_id}))
     return {
         "id": c["id"], "title": c["title"], "subtitle": c["subtitle"],
         "emoji": c["emoji"], "color": c["color"], "count": len(docs),
+        "is_following": is_following,
         "prompts": [prompt_to_dict(d, liked) for d in docs],
     }
+
+
+@api_router.post("/collections/{collection_id}/follow")
+async def toggle_follow(collection_id: str, current_user: dict = Depends(get_current_user)):
+    if collection_id not in COLLECTIONS_BY_ID:
+        raise HTTPException(404, "Collection not found")
+    uid = current_user["user_id"]
+    existing = await db.collection_follows.find_one({"user_id": uid, "collection_id": collection_id})
+    if existing:
+        await db.collection_follows.delete_one({"user_id": uid, "collection_id": collection_id})
+        return {"is_following": False}
+    await db.collection_follows.insert_one({
+        "user_id": uid, "collection_id": collection_id, "created_at": datetime.now(timezone.utc)})
+    return {"is_following": True}
+
+
+@api_router.get("/weekly-warriors")
+async def weekly_warriors(limit: int = Query(5, ge=1, le=20)):
+    """Top contributors by activity in the last 7 days (excludes the official account)."""
+    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    scores: Dict[str, int] = defaultdict(int)
+
+    # Uploads in the last 7 days
+    up = await db.prompts.aggregate([
+        {"$match": {"created_at": {"$gte": week_ago}, "author_id": {"$ne": OFFICIAL_AUTHOR_ID}}},
+        {"$group": {"_id": "$author_id", "c": {"$sum": 1}}},
+    ]).to_list(500)
+    for r in up:
+        scores[r["_id"]] += r["c"] * 10
+
+    # Likes received in the last 7 days (join like → prompt author)
+    lk = await db.prompt_likes.aggregate([
+        {"$match": {"created_at": {"$gte": week_ago}}},
+        {"$lookup": {"from": "prompts", "localField": "prompt_id", "foreignField": "id", "as": "p"}},
+        {"$unwind": "$p"},
+        {"$match": {"p.author_id": {"$ne": OFFICIAL_AUTHOR_ID}}},
+        {"$group": {"_id": "$p.author_id", "c": {"$sum": 1}}},
+    ]).to_list(500)
+    for r in lk:
+        scores[r["_id"]] += r["c"] * 3
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    result = []
+    for user_id, wscore in ranked:
+        if wscore <= 0:
+            continue
+        u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "name": 1, "picture": 1})
+        g = await db.gamification.find_one({"user_id": user_id}, {"_id": 0, "score": 1}) or {}
+        rank = rank_for_score(g.get("score", 0))
+        result.append({
+            "user_id": user_id,
+            "name": (u or {}).get("name", "Warrior"),
+            "picture": (u or {}).get("picture", ""),
+            "weekly_score": wscore,
+            "rank": {"level": rank["level"], "name": rank["name"], "medal": rank["medal"], "color": rank["color"]},
+        })
+    return result
 
 
 # ==================== PAYMENTS (Stripe infra — all content free for MVP) ====================
@@ -954,6 +1068,46 @@ async def seed_prompts_if_empty():
     logger.info(f"Seeded {len(docs)} prompts")
 
 
+async def sync_extra_prompts():
+    """Idempotently add the curated 300-prompt library (by title+category)."""
+    await db.users.update_one(
+        {"user_id": OFFICIAL_AUTHOR_ID},
+        {"$setOnInsert": {
+            "user_id": OFFICIAL_AUTHOR_ID, "email": "team@promptveer.app",
+            "name": OFFICIAL_AUTHOR_NAME, "picture": "", "is_official": True,
+            "created_at": datetime.now(timezone.utc),
+        }},
+        upsert=True,
+    )
+    extra = build_extra_prompts()
+    existing = await db.prompts.find(
+        {"author_id": OFFICIAL_AUTHOR_ID}, {"_id": 0, "title": 1, "category": 1}).to_list(2000)
+    have = {(e.get("title"), e.get("category")) for e in existing}
+    now = datetime.now(timezone.utc)
+    base = now - timedelta(days=2)
+    to_insert = []
+    for i, p in enumerate(extra):
+        if (p["title"], p["category"]) in have:
+            continue
+        to_insert.append({
+            "id": uuid.uuid4().hex,
+            "title": p["title"], "content": p["content"], "category": p["category"],
+            "subcategory": p.get("subcategory"), "tool": p.get("tool"),
+            "industry": p.get("industry", "General"), "difficulty": p.get("difficulty", "Beginner"),
+            "use_case": p.get("use_case"), "content_type": p.get("content_type", "Text"),
+            "author_id": OFFICIAL_AUTHOR_ID, "author_name": OFFICIAL_AUTHOR_NAME,
+            "likes": 0, "shares": 0, "copies": 0, "avg_rating": 0, "rating_count": 0,
+            "trending_score": 0,
+            "created_at": base - timedelta(minutes=i),
+            "updated_at": base - timedelta(minutes=i),
+        })
+    if to_insert:
+        await db.prompts.insert_many(to_insert)
+        logger.info(f"Synced {len(to_insert)} curated prompts")
+    else:
+        logger.info("Curated prompts already present")
+
+
 @app.on_event("startup")
 async def startup():
     try:
@@ -969,6 +1123,9 @@ async def startup():
         await db.prompt_likes.create_index([("user_id", 1), ("prompt_id", 1)], unique=True)
         await db.ratings.create_index([("prompt_id", 1), ("user_id", 1)], unique=True)
         await db.ratings.create_index([("prompt_id", 1), ("created_at", -1)])
+        await db.ratings.create_index("id")
+        await db.review_reactions.create_index([("rating_id", 1), ("user_id", 1)], unique=True)
+        await db.collection_follows.create_index([("user_id", 1), ("collection_id", 1)], unique=True)
         await db.gamification.create_index("user_id", unique=True)
         await db.gamification.create_index([("score", -1)])
         await db.payment_transactions.create_index("session_id", unique=True)
@@ -980,6 +1137,10 @@ async def startup():
         await seed_prompts_if_empty()
     except Exception as e:
         logger.error(f"Seeding error: {e}")
+    try:
+        await sync_extra_prompts()
+    except Exception as e:
+        logger.error(f"Extra prompt sync error: {e}")
 
 
 @app.on_event("shutdown")

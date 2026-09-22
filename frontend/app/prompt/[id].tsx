@@ -26,6 +26,16 @@ export default function PromptDetail() {
   const [reviewText, setReviewText] = useState('');
   const [savingRating, setSavingRating] = useState(false);
 
+  const toggleHelpful = async (rid?: string) => {
+    if (!rid) return;
+    if (Platform.OS !== 'web') Haptics.selectionAsync();
+    setReviews((prev) => prev.map((rv) =>
+      rv.id === rid
+        ? { ...rv, is_helpful: !rv.is_helpful, helpful_count: (rv.helpful_count || 0) + (rv.is_helpful ? -1 : 1) }
+        : rv));
+    try { await api.markHelpful(rid); } catch {}
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -193,6 +203,11 @@ export default function PromptDetail() {
                   <StarRating value={rv.stars} size={13} />
                 </View>
                 <Text style={styles.reviewBody}>{rv.review}</Text>
+                <Pressable style={styles.helpfulBtn} onPress={() => toggleHelpful(rv.id)} hitSlop={6} testID={`helpful-${i}`}>
+                  <Text style={[styles.helpfulText, rv.is_helpful && styles.helpfulActive]}>
+                    👍 Helpful{rv.helpful_count ? ` · ${rv.helpful_count}` : ''}
+                  </Text>
+                </Pressable>
               </View>
             ))}
           </View>
@@ -267,6 +282,9 @@ const styles = StyleSheet.create({
   reviewHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   reviewAuthor: { color: COLORS.gold, fontWeight: '700', fontSize: 13.5 },
   reviewBody: { color: COLORS.text, fontSize: 14, lineHeight: 20 },
+  helpfulBtn: { marginTop: 8, alignSelf: 'flex-start' },
+  helpfulText: { color: COLORS.textSecondary, fontSize: 12.5, fontWeight: '700' },
+  helpfulActive: { color: COLORS.gold },
   actionBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center',
     gap: 12, paddingHorizontal: SPACING.md, paddingTop: 12, backgroundColor: COLORS.backgroundAlt,

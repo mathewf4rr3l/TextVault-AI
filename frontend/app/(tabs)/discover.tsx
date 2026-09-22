@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
-import { api, Prompt, CollectionPreview, StreakStatus } from '../../utils/api';
+import { api, Prompt, CollectionPreview, StreakStatus, WeeklyWarrior } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useTaxonomy, categoryEmojiMap } from '../../src/lib/taxonomy';
 import PromptCard from '../../src/components/PromptCard';
@@ -26,6 +26,7 @@ export default function Discover() {
   const emojiMap = categoryEmojiMap(taxonomy);
   const [data, setData] = useState<DiscoverData | null>(null);
   const [collections, setCollections] = useState<CollectionPreview[]>([]);
+  const [warriors, setWarriors] = useState<WeeklyWarrior[]>([]);
   const [streak, setStreak] = useState<StreakStatus | null>(null);
   const [streakDismissed, setStreakDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -33,9 +34,10 @@ export default function Discover() {
 
   const load = useCallback(async () => {
     try {
-      const [d, c] = await Promise.all([api.discover(), api.getCollections()]);
+      const [d, c, w] = await Promise.all([api.discover(), api.getCollections(), api.getWeeklyWarriors()]);
       setData(d);
       setCollections(c);
+      setWarriors(w);
     } catch {}
     finally { setLoading(false); }
     try { setStreak(await api.getStreak()); } catch {}
@@ -115,6 +117,33 @@ export default function Discover() {
             <Text style={[styles.quickText, styles.quickTextGold]}>👑 Go Pro</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Weekly Warriors */}
+        {warriors.length > 0 && (
+          <>
+            <SectionHeader title="🏅 Weekly Warriors" onSeeAll={() => router.push('/leaderboard' as any)} />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingHorizontal: SPACING.md, gap: 12, marginBottom: SPACING.sm }}
+            >
+              {warriors.map((w, i) => (
+                <View key={w.user_id} style={styles.warriorCard}>
+                  <Text style={styles.warriorRankNum}>#{i + 1}</Text>
+                  {w.picture ? (
+                    <Image source={{ uri: w.picture }} style={styles.warriorAvatar} />
+                  ) : (
+                    <View style={[styles.warriorAvatar, styles.warriorAvatarFallback, { backgroundColor: w.rank.color }]}>
+                      <Text style={styles.warriorMedal}>{w.rank.medal}</Text>
+                    </View>
+                  )}
+                  <Text style={styles.warriorName} numberOfLines={1}>{w.name}</Text>
+                  <Text style={styles.warriorScore}>+{w.weekly_score} pts</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </>
+        )}
 
         {/* Collections */}
         <SectionHeader title="⭐ Curated Collections" />
@@ -245,6 +274,16 @@ const styles = StyleSheet.create({
   collectionSub: { color: COLORS.textSecondary, fontSize: 12 },
   collectionCount: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
   collectionCountText: { color: '#1A0E2E', fontSize: 11, fontWeight: '800' },
+  warriorCard: {
+    width: 110, backgroundColor: COLORS.card, borderRadius: RADIUS.lg, borderWidth: 1,
+    borderColor: COLORS.border, padding: 12, alignItems: 'center', gap: 4,
+  },
+  warriorRankNum: { color: COLORS.gold, fontSize: 13, fontWeight: '900' },
+  warriorAvatar: { width: 44, height: 44, borderRadius: 22, marginTop: 2 },
+  warriorAvatarFallback: { justifyContent: 'center', alignItems: 'center' },
+  warriorMedal: { fontSize: 22 },
+  warriorName: { color: COLORS.white, fontSize: 12.5, fontWeight: '700', marginTop: 4 },
+  warriorScore: { color: COLORS.purpleLight, fontSize: 11.5, fontWeight: '700' },
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: SPACING.md, marginTop: SPACING.sm, marginBottom: SPACING.md,
