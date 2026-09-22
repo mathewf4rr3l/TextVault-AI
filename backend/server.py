@@ -66,8 +66,20 @@ class RateLimiter:
 
 
 guest_rate_limiter = RateLimiter(max_calls=5, window_seconds=60)
+# Stricter daily cap per trusted IP to blunt sybil guest farming
+guest_daily_limiter = RateLimiter(max_calls=10, window_seconds=3600)
 auth_session_rate_limiter = RateLimiter(max_calls=5, window_seconds=60)
 create_rate_limiter = RateLimiter(max_calls=30, window_seconds=60)
+copy_rate_limiter = RateLimiter(max_calls=20, window_seconds=60)
+
+
+def get_client_ip(request: Request) -> str:
+    """Rightmost X-Forwarded-For entry is the one appended by the trusted proxy;
+    the leftmost is client-supplied and spoofable."""
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
 
 
 # ==================== MODELS ====================
@@ -254,7 +266,7 @@ async def liked_ids_for(user_id: Optional[str], prompt_ids: List[str]) -> set:
 
 @api_router.post("/auth/session")
 async def exchange_session(body: SessionExchangeRequest, request: Request):
-    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
+    client_ip = get_client_ip(request)
     if not auth_session_rate_limiter.is_allowed(client_ip):
         raise HTTPException(status_code=429, detail="Too many authentication requests.")
     try:
@@ -305,8 +317,8 @@ async def exchange_session(body: SessionExchangeRequest, request: Request):
 
 @api_router.post("/auth/guest")
 async def create_guest_session(body: GuestSessionRequest, request: Request):
-    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
-    if not guest_rate_limiter.is_allowed(client_ip):
+    client_ip = get_client_ip(request)
+    if not guest_rate_limiter.is_allowed(client_ip) or not guest_daily_limiter.is_allowed(client_ip):
         raise HTTPException(status_code=429, detail="Too many requests. Please wait before trying again.")
     try:
         device_hash = hashlib.sha256(body.device_id[:128].encode()).hexdigest()[:16]
@@ -563,8 +575,16 @@ async def share_prompt(prompt_id: str, current_user: dict = Depends(get_current_
     doc = await db.prompts.find_one({"id": prompt_id})
     if not doc:
         raise HTTPException(404, "Prompt not found")
-    await db.prompts.update_one({"id": prompt_id}, {"$inc": {"shares": 1, "trending_score": 2}})
-    await recompute_gamification(doc["author_id"])
+    # Only the FIRST share per user per prompt counts — prevents score farming.
+    res = await db.prompt_shares.update_one(
+        {"user_id": current_user["user_id"], "prompt_id": prompt_id},
+        {"$setOnInsert": {"user_id": current_user["user_id"], "prompt_id": prompt_id,
+                          "created_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    if res.upserted_id is not None:
+        await db.prompts.update_one({"id": prompt_id}, {"$inc": {"shares": 1, "trending_score": 2}})
+        await recompute_gamification(doc["author_id"])
     updated = await db.prompts.find_one({"id": prompt_id}, {"_id": 0})
     return {"shares": updated["shares"]}
 
@@ -575,9 +595,21 @@ async def copy_prompt(prompt_id: str, current_user: dict = Depends(get_current_u
     doc = await db.prompts.find_one({"id": prompt_id})
     if not doc:
         raise HTTPException(404, "Prompt not found")
-    await db.prompts.update_one({"id": prompt_id}, {"$inc": {"copies": 1, "trending_score": 1}})
-
     uid = current_user["user_id"]
+    if not copy_rate_limiter.is_allowed(uid):
+        raise HTTPException(status_code=429, detail="Copying too fast. Please slow down.")
+    # Only the first copy of a prompt per user per day counts toward its stats —
+    # prevents copy-spam score farming while keeping repeat copies functional.
+    today_key = date.today().isoformat()
+    res = await db.prompt_copies.update_one(
+        {"user_id": uid, "prompt_id": prompt_id, "day": today_key},
+        {"$setOnInsert": {"user_id": uid, "prompt_id": prompt_id, "day": today_key,
+                          "created_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    if res.upserted_id is not None:
+        await db.prompts.update_one({"id": prompt_id}, {"$inc": {"copies": 1, "trending_score": 1}})
+
     g = await db.gamification.find_one({"user_id": uid}) or {}
     today = date.today().isoformat()
     yesterday = (date.today() - timedelta(days=1)).isoformat()
@@ -1391,6 +1423,8 @@ async def startup():
         await db.prompts.create_index([("trending_score", -1)])
         await db.prompts.create_index([("author_id", 1)])
         await db.prompt_likes.create_index([("user_id", 1), ("prompt_id", 1)], unique=True)
+        await db.prompt_shares.create_index([("user_id", 1), ("prompt_id", 1)], unique=True)
+        await db.prompt_copies.create_index([("user_id", 1), ("prompt_id", 1), ("day", 1)], unique=True)
         await db.ratings.create_index([("prompt_id", 1), ("user_id", 1)], unique=True)
         await db.ratings.create_index([("prompt_id", 1), ("created_at", -1)])
         await db.ratings.create_index("id")

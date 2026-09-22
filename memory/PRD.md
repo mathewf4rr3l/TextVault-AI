@@ -56,6 +56,9 @@ Ranks 1–10: Ghatotkach → Satyaki → Bhagadatta → Abhimanyu → Bhisma →
 
 ## Backlog / Next
 ### Done this round
+- [x] Security audit fixes (SEC-001/002) — share counts deduped per user+prompt (`prompt_shares`); copy stats count once per user+prompt+day (`prompt_copies`) with 20/min per-user rate limit; rate limiting now keyed on trusted rightmost X-Forwarded-For; guest creation capped at 5/min + 10/hour per IP
+
+### Done earlier
 - [x] Prompt Report — `POST /api/prompts/{id}/report` (reason: spam/low_quality/copied/other; idempotent; prompt stays visible); flag button + reason modal on prompt detail
 - [x] Share Folders — publish a folder as a public pack (`POST /api/folders/{id}/publish`); `GET /api/community-folders` + `/{id}`; follow packs (`POST /api/community-folders/{id}/follow`); "Community Packs" row on Packs tab; `/pack/[id]` public view; publish toggle + Share button on owner folder screen
 - [x] Daily Reminder — dismissible "Today's pick is ready" banner on Discover linking to POTD (once/day via local storage)
