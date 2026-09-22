@@ -14,7 +14,8 @@ import Chip from '../../src/components/Chip';
 const SORTS: { key: PromptFilters['sort']; label: string }[] = [
   { key: 'trending', label: '🔥 Trending' },
   { key: 'newest', label: '🆕 Newest' },
-  { key: 'top', label: '⭐ Top' },
+  { key: 'top', label: '⭐ Most Liked' },
+  { key: 'top_rated', label: '🌟 Top Rated' },
 ];
 
 export default function Browse() {

@@ -1,0 +1,39 @@
+{
+  "summary": "PromptVeer iteration 7 — 24/24 backend pytest PASS + frontend visual verification PASS for the 3 new features. (1) Ratings & Reviews: POST /api/prompts/{id}/rate upserts a single rating per (prompt,user), returns {avg_rating,rating_count,my_rating}; rating twice UPDATES (rating_count unchanged), stars=0 or 6 => 422, unauth => 401, unknown prompt => 404; multi-user avg recomputes correctly (2★+4★ ⇒ avg ∈ [2,4]); GET /api/prompts/{id} now exposes my_rating (=stars for owner, 0 for unauth / unrated user) plus avg_rating & rating_count; GET /api/prompts/{id}/reviews returns only ratings with non-empty review text, newest-first, and does NOT leak user_id; GET /api/prompts?sort=top_rated orders prompts by avg_rating desc among rated ones. (2) Streak: GET /api/streak requires auth (401), returns {copy_streak,longest_streak,copied_today,at_risk,badge{emoji,label}}; brand-new guest correctly has copy_streak=0/at_risk=false; after POST /copy today copied_today=true and at_risk=false (definition: only true when copied YESTERDAY but not today). (3) Collections regression: /api/collections still returns exactly 8, /api/collections/{id} works, unknown=>404. Frontend: 6 tabs render (Discover, Browse, ⭐ Packs, Search, Library, Profile); Packs tab lists all 8 collections with correct testIDs (collection-<id>) and tapping opens /collection/{id} with prompts; Prompt detail shows avg '5.0' summary + star row + '2 ratings' count + 'Rate this prompt' interactive star row + optional review input + 'Post review' button; Browse tab has '🌟 Top Rated' sort chip and clicking it visibly reorders (5.0-rated card lifts above 4.0-rated card); prompt cards show '⭐ 5.0' when rating_count>0; new PromptVeer brand-mark logo appears in Discover header. No red screens, no console errors. Minor: interactive stars in StarRating.tsx lack testIDs (testability nit).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_promptveer_v3.py",
+    "/app/test_reports/pytest/pytest_results_iter7.xml"
+  ],
+  "action_items": [
+    "Add testID to each interactive Pressable in /app/frontend/src/components/StarRating.tsx (e.g. testID={`star-${s}`}) so ratings can be tapped reliably in Playwright. Non-blocking, feature works.",
+    "StarRating.tsx line 19: `const glyph = ... '⯪' ...` is computed but never used — the Text on line 22 uses a separate ternary that only picks '★'/'☆'. Either wire `glyph` into the Text or delete the dead half-star branch."
+  ],
+  "critical_code_review_comments": [
+    "server.py:645 GET /api/streak: at_risk logic uses `last == yesterday` string compare — correct today, but if the server later moves to UTC-aware date rollovers per user timezone, this will misfire near midnight. Fine for MVP.",
+    "server.py:632 GET /api/prompts/{id}/reviews strips only `_id` and `user_id`; ratings without a `review` field are correctly excluded via `review: {$ne: ''}`. Note: the upsert always writes `review: (body.review or '').strip()`, so no null values ever exist — good.",
+    "server.py:604 rate_prompt does not enforce that a user has copied/liked the prompt before rating — anyone with a guest token can rate any prompt. If gating is desired later, add a copies>0 or likes>0 precondition.",
+    "StarRating.tsx interactive Pressables lack testID → Playwright cannot reliably target individual stars; dead-code `glyph` var (see action_items)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_promptveer_v3.py (new — 24 tests, 100% pass)"
+  ],
+  "success_rate": {
+    "backend": "100% (24/24)",
+    "frontend": "100% visual verification of the 3 new features (Packs tab, Ratings UI on detail, Top Rated sort chip, logo)"
+  },
+  "seed_data_creation": "None permanent. Tests create fresh TEST_ratings_* guest sessions each run (module-scoped, disposable). A few TEST review rows are added to seeded prompts to exercise the reviews list; they are harmless and cleaned when Mongo TTL expires the guest session (but the ratings themselves persist — acceptable since they belong to test users).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Regression suite lives at /app/backend/tests/test_promptveer_v3.py (iteration 7). Run alongside test_promptveer_v2.py (iteration 6) for full coverage. All tests use unique TEST_* device_ids so they are idempotent. Streak 'at_risk' is by design FALSE for brand-new guests and for users who have already copied today — do not treat that as a bug. The Discover streak banner will only appear when at_risk=true, so it correctly hides for fresh sessions in preview.",
+  "rca_of_issue": "N/A — no bugs found this iteration. All 3 new features (Ratings & Reviews, Collections tab, Streak Reminders) plus the new logo integration work end-to-end."
+}

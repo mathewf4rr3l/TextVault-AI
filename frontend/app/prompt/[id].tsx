@@ -1,16 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, Pressable,
-  Share, Platform, Alert,
+  Share, Platform, Alert, TextInput,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { api, Prompt, formatCount, timeAgo } from '../../utils/api';
+import { api, Prompt, Review, formatCount, timeAgo } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useApp } from '../../context/AppContext';
 import DifficultyBadge from '../../src/components/DifficultyBadge';
+import StarRating from '../../src/components/StarRating';
 
 export default function PromptDetail() {
   const insets = useSafeAreaInsets();
@@ -21,13 +22,39 @@ export default function PromptDetail() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [streakMsg, setStreakMsg] = useState('');
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [reviewText, setReviewText] = useState('');
+  const [savingRating, setSavingRating] = useState(false);
 
   useEffect(() => {
     (async () => {
-      try { setPrompt(await api.getPrompt(id)); } catch {}
+      try {
+        const [p, r] = await Promise.all([api.getPrompt(id), api.getReviews(id)]);
+        setPrompt(p);
+        setReviews(r);
+      } catch {}
       finally { setLoading(false); }
     })();
   }, [id]);
+
+  const submitRating = async (stars: number) => {
+    if (!prompt || savingRating) return;
+    setSavingRating(true);
+    setPrompt({ ...prompt, my_rating: stars });
+    if (Platform.OS !== 'web') Haptics.selectionAsync();
+    try {
+      const r = await api.ratePrompt(prompt.id, stars, reviewText.trim() || undefined);
+      setPrompt((p) => p ? { ...p, my_rating: r.my_rating, avg_rating: r.avg_rating, rating_count: r.rating_count } : p);
+      if (reviewText.trim()) {
+        setReviews((prev) => [
+          { author_name: user?.name || 'You', stars, review: reviewText.trim(), created_at: new Date().toISOString() },
+          ...prev.filter((rv) => rv.author_name !== (user?.name || 'You')),
+        ]);
+        setReviewText('');
+      }
+    } catch {}
+    finally { setSavingRating(false); }
+  };
 
   const onCopy = async () => {
     if (!prompt) return;
@@ -126,6 +153,50 @@ export default function PromptDetail() {
           </View>
           <Text style={styles.promptContent} selectable>{prompt.content}</Text>
         </View>
+
+        {/* Ratings & Reviews */}
+        <View style={styles.ratingSummary}>
+          <View>
+            <Text style={styles.ratingBig}>{(prompt.avg_rating ?? 0).toFixed(1)}</Text>
+            <StarRating value={prompt.avg_rating ?? 0} size={16} />
+            <Text style={styles.ratingCount}>{prompt.rating_count ?? 0} rating{(prompt.rating_count ?? 0) !== 1 ? 's' : ''}</Text>
+          </View>
+        </View>
+
+        <View style={styles.rateBox}>
+          <Text style={styles.rateLabel}>{prompt.my_rating ? 'Your rating' : 'Rate this prompt'}</Text>
+          <StarRating value={prompt.my_rating ?? 0} size={30} onChange={submitRating} />
+          <TextInput
+            style={styles.reviewInput}
+            placeholder="Add a short review (optional)…"
+            placeholderTextColor={COLORS.textMuted}
+            value={reviewText}
+            onChangeText={setReviewText}
+            multiline
+            maxLength={1000}
+            testID="review-input"
+          />
+          {reviewText.trim().length > 0 && (
+            <TouchableOpacity style={styles.reviewSubmit} onPress={() => submitRating(prompt.my_rating || 5)} testID="review-submit">
+              <Text style={styles.reviewSubmitText}>{savingRating ? 'Saving…' : 'Post review'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {reviews.length > 0 && (
+          <View style={styles.reviewsSection}>
+            <Text style={styles.reviewsTitle}>Reviews ({reviews.length})</Text>
+            {reviews.map((rv, i) => (
+              <View key={`${rv.author_name}-${i}`} style={styles.reviewCard}>
+                <View style={styles.reviewHead}>
+                  <Text style={styles.reviewAuthor}>{rv.author_name}</Text>
+                  <StarRating value={rv.stars} size={13} />
+                </View>
+                <Text style={styles.reviewBody}>{rv.review}</Text>
+              </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       {/* Sticky action bar */}
@@ -176,6 +247,26 @@ const styles = StyleSheet.create({
   promptLabel: { color: COLORS.textMuted, fontSize: 11.5, fontWeight: '800', letterSpacing: 1 },
   copyInline: { color: COLORS.gold, fontWeight: '700', fontSize: 13 },
   promptContent: { color: COLORS.text, fontSize: 15.5, lineHeight: 24 },
+  ratingSummary: { marginTop: 20, flexDirection: 'row', alignItems: 'center', gap: 16 },
+  ratingBig: { color: COLORS.white, fontSize: 34, fontWeight: '900' },
+  ratingCount: { color: COLORS.textMuted, fontSize: 12, marginTop: 4 },
+  rateBox: {
+    marginTop: 16, backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md,
+    borderWidth: 1, borderColor: COLORS.border, gap: 12,
+  },
+  rateLabel: { color: COLORS.white, fontSize: 14.5, fontWeight: '800' },
+  reviewInput: {
+    backgroundColor: COLORS.background, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border,
+    color: COLORS.white, padding: 12, fontSize: 14.5, minHeight: 60, textAlignVertical: 'top',
+  },
+  reviewSubmit: { backgroundColor: COLORS.purple, borderRadius: RADIUS.md, paddingVertical: 11, alignItems: 'center' },
+  reviewSubmitText: { color: COLORS.white, fontWeight: '800', fontSize: 14 },
+  reviewsSection: { marginTop: 20, gap: 10 },
+  reviewsTitle: { color: COLORS.white, fontSize: 16, fontWeight: '800' },
+  reviewCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: 12, borderWidth: 1, borderColor: COLORS.border },
+  reviewHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  reviewAuthor: { color: COLORS.gold, fontWeight: '700', fontSize: 13.5 },
+  reviewBody: { color: COLORS.text, fontSize: 14, lineHeight: 20 },
   actionBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center',
     gap: 12, paddingHorizontal: SPACING.md, paddingTop: 12, backgroundColor: COLORS.backgroundAlt,

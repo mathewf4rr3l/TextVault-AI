@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, Alert, Pressable,
+  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform, Alert, Pressable, Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -67,7 +67,9 @@ export default function SignIn() {
       </View>
 
       <View style={styles.hero}>
-        <View style={styles.logoBox}><Text style={styles.logoEmoji}>⚔️</Text></View>
+        <View style={styles.logoBox}>
+          <Image source={require('../assets/images/logo-mark.png')} style={styles.logoImg} resizeMode="contain" />
+        </View>
         <Text style={styles.title}>Join PromptVeer</Text>
         <Text style={styles.tagline}>Sign in to save your rank across devices and keep climbing the warrior ladder.</Text>
 
@@ -106,9 +108,11 @@ const styles = StyleSheet.create({
   close: { color: COLORS.white, fontSize: 22, fontWeight: '700' },
   hero: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: SPACING.xl, gap: 14 },
   logoBox: {
-    width: 92, height: 92, borderRadius: 26, backgroundColor: COLORS.purpleGlow,
+    width: 100, height: 100, borderRadius: 26, backgroundColor: COLORS.purpleGlow,
     borderWidth: 1.5, borderColor: COLORS.purpleLight, justifyContent: 'center', alignItems: 'center',
+    overflow: 'hidden',
   },
+  logoImg: { width: 92, height: 92 },
   logoEmoji: { fontSize: 46 },
   title: { fontSize: 30, fontWeight: '900', color: COLORS.white },
   tagline: { fontSize: 15, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 21 },

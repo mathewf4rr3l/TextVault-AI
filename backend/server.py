@@ -103,6 +103,11 @@ class PromptUpdate(BaseModel):
     content_type: Optional[str] = Field(None, max_length=20)
 
 
+class RatingRequest(BaseModel):
+    stars: int = Field(..., ge=1, le=5)
+    review: Optional[str] = Field(None, max_length=1000)
+
+
 # ==================== AUTH HELPERS ====================
 
 async def get_current_user(request: Request) -> dict:
@@ -212,6 +217,8 @@ def prompt_to_dict(doc: dict, liked_ids: Optional[set] = None) -> dict:
     if isinstance(d.get("updated_at"), datetime):
         d["updated_at"] = d["updated_at"].isoformat()
     d["is_liked"] = bool(liked_ids and d.get("id") in liked_ids)
+    d.setdefault("avg_rating", 0)
+    d.setdefault("rating_count", 0)
     return d
 
 
@@ -396,6 +403,8 @@ async def list_prompts(
         sort_spec = [("created_at", -1)]
     elif sort == "top":
         sort_spec = [("likes", -1), ("created_at", -1)]
+    elif sort == "top_rated":
+        sort_spec = [("avg_rating", -1), ("rating_count", -1), ("likes", -1)]
     else:  # trending
         sort_spec = [("trending_score", -1), ("created_at", -1)]
     cursor = db.prompts.find(query, {"_id": 0}).sort(sort_spec).skip(skip).limit(limit)
@@ -436,7 +445,13 @@ async def get_prompt(prompt_id: str, request: Request):
         raise HTTPException(404, "Prompt not found")
     user = await get_optional_user(request)
     liked = await liked_ids_for(user["user_id"] if user else None, [prompt_id])
-    return prompt_to_dict(doc, liked)
+    result = prompt_to_dict(doc, liked)
+    result["my_rating"] = 0
+    if user:
+        mine = await db.ratings.find_one({"prompt_id": prompt_id, "user_id": user["user_id"]}, {"_id": 0, "stars": 1})
+        if mine:
+            result["my_rating"] = mine["stars"]
+    return result
 
 
 @api_router.post("/prompts")
@@ -582,6 +597,67 @@ async def copy_prompt(prompt_id: str, current_user: dict = Depends(get_current_u
         "copies": updated.get("copies", 0),
         "streak": streak,
         "points_awarded": awarded,
+        "badge": streak_badge(streak),
+    }
+
+
+@api_router.post("/prompts/{prompt_id}/rate")
+async def rate_prompt(prompt_id: str, body: RatingRequest, current_user: dict = Depends(get_current_user)):
+    doc = await db.prompts.find_one({"id": prompt_id})
+    if not doc:
+        raise HTTPException(404, "Prompt not found")
+    uid = current_user["user_id"]
+    await db.ratings.update_one(
+        {"prompt_id": prompt_id, "user_id": uid},
+        {"$set": {
+            "prompt_id": prompt_id,
+            "user_id": uid,
+            "author_name": current_user.get("name") or "Anonymous",
+            "stars": body.stars,
+            "review": (body.review or "").strip(),
+            "updated_at": datetime.now(timezone.utc),
+        }, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    agg = await db.ratings.aggregate([
+        {"$match": {"prompt_id": prompt_id}},
+        {"$group": {"_id": None, "avg": {"$avg": "$stars"}, "count": {"$sum": 1}}},
+    ]).to_list(1)
+    avg = round(agg[0]["avg"], 2) if agg else 0
+    count = agg[0]["count"] if agg else 0
+    await db.prompts.update_one({"id": prompt_id}, {"$set": {"avg_rating": avg, "rating_count": count}})
+    return {"avg_rating": avg, "rating_count": count, "my_rating": body.stars}
+
+
+@api_router.get("/prompts/{prompt_id}/reviews")
+async def list_reviews(prompt_id: str, limit: int = Query(30, ge=1, le=100)):
+    cursor = db.ratings.find(
+        {"prompt_id": prompt_id, "review": {"$ne": ""}}, {"_id": 0, "user_id": 0}
+    ).sort("created_at", -1).limit(limit)
+    docs = await cursor.to_list(limit)
+    for d in docs:
+        if isinstance(d.get("created_at"), datetime):
+            d["created_at"] = d["created_at"].isoformat()
+        d.pop("updated_at", None)
+    return docs
+
+
+@api_router.get("/streak")
+async def streak_status(current_user: dict = Depends(get_current_user)):
+    """Lightweight streak check for in-app reminders."""
+    g = await db.gamification.find_one({"user_id": current_user["user_id"]}, {"_id": 0}) or {}
+    streak = g.get("copy_streak", 0)
+    last = g.get("last_copy_date")
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    copied_today = last == today
+    # Streak is "at risk" if the user has an ongoing streak (copied yesterday) but not yet today
+    at_risk = (streak >= 1) and (last == yesterday)
+    return {
+        "copy_streak": streak,
+        "longest_streak": g.get("longest_streak", 0),
+        "copied_today": copied_today,
+        "at_risk": at_risk,
         "badge": streak_badge(streak),
     }
 
@@ -891,6 +967,8 @@ async def startup():
         await db.prompts.create_index([("trending_score", -1)])
         await db.prompts.create_index([("author_id", 1)])
         await db.prompt_likes.create_index([("user_id", 1), ("prompt_id", 1)], unique=True)
+        await db.ratings.create_index([("prompt_id", 1), ("user_id", 1)], unique=True)
+        await db.ratings.create_index([("prompt_id", 1), ("created_at", -1)])
         await db.gamification.create_index("user_id", unique=True)
         await db.gamification.create_index([("score", -1)])
         await db.payment_transactions.create_index("session_id", unique=True)

@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator,
-  Pressable, TouchableOpacity,
+  Pressable, TouchableOpacity, Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
-import { api, Prompt, CollectionPreview } from '../../utils/api';
+import { api, Prompt, CollectionPreview, StreakStatus } from '../../utils/api';
 import { COLORS, SPACING, RADIUS } from '../../constants/theme';
 import { useTaxonomy, categoryEmojiMap } from '../../src/lib/taxonomy';
 import PromptCard from '../../src/components/PromptCard';
@@ -26,6 +26,8 @@ export default function Discover() {
   const emojiMap = categoryEmojiMap(taxonomy);
   const [data, setData] = useState<DiscoverData | null>(null);
   const [collections, setCollections] = useState<CollectionPreview[]>([]);
+  const [streak, setStreak] = useState<StreakStatus | null>(null);
+  const [streakDismissed, setStreakDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -36,6 +38,7 @@ export default function Discover() {
       setCollections(c);
     } catch {}
     finally { setLoading(false); }
+    try { setStreak(await api.getStreak()); } catch {}
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -72,11 +75,31 @@ export default function Discover() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.gold} />}
       >
+        {/* Streak reminder */}
+        {streak?.at_risk && !streakDismissed && (
+          <Pressable
+            style={styles.streakBanner}
+            onPress={() => { setStreakDismissed(true); router.push('/(tabs)/browse' as any); }}
+          >
+            <Text style={styles.streakBannerEmoji}>{streak.badge.emoji || '🔥'}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.streakBannerTitle}>Keep your {streak.copy_streak}-day streak alive!</Text>
+              <Text style={styles.streakBannerSub}>Copy a prompt today to earn bonus points.</Text>
+            </View>
+            <Pressable onPress={() => setStreakDismissed(true)} hitSlop={10}>
+              <Text style={styles.streakBannerClose}>✕</Text>
+            </Pressable>
+          </Pressable>
+        )}
+
         {/* Header */}
         <View style={styles.header}>
-          <View>
-            <Text style={styles.brand}>PromptVeer</Text>
-            <Text style={styles.sub}>Discover battle-tested AI prompts</Text>
+          <View style={styles.brandRow}>
+            <Image source={require('../../assets/images/logo-mark.png')} style={styles.brandLogo} resizeMode="contain" />
+            <View>
+              <Text style={styles.brand}>PromptVeer</Text>
+              <Text style={styles.sub}>Discover battle-tested AI prompts</Text>
+            </View>
           </View>
           <TouchableOpacity style={styles.submitBtn} onPress={() => router.push('/submit' as any)} testID="submit-nav-btn">
             <Text style={styles.submitBtnText}>+ Submit</Text>
@@ -189,13 +212,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: SPACING.md, marginBottom: SPACING.lg,
   },
-  brand: { fontSize: 28, fontWeight: '900', color: COLORS.white, letterSpacing: -0.5 },
+  brand: { fontSize: 24, fontWeight: '900', color: COLORS.white, letterSpacing: -0.5 },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  brandLogo: { width: 40, height: 40 },
   sub: { fontSize: 13.5, color: COLORS.purpleLight, marginTop: 2 },
   submitBtn: {
     backgroundColor: COLORS.gold, paddingHorizontal: 16, paddingVertical: 10, borderRadius: RADIUS.pill,
   },
   submitBtnText: { color: '#2A1400', fontWeight: '800', fontSize: 14 },
   quickRow: { flexDirection: 'row', gap: 10, paddingHorizontal: SPACING.md, marginBottom: SPACING.lg },
+  streakBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: SPACING.md, marginBottom: SPACING.md,
+    backgroundColor: COLORS.goldSoft, borderRadius: RADIUS.lg, padding: 14, borderWidth: 1, borderColor: COLORS.gold,
+  },
+  streakBannerEmoji: { fontSize: 26 },
+  streakBannerTitle: { color: COLORS.white, fontSize: 14.5, fontWeight: '800' },
+  streakBannerSub: { color: COLORS.textSecondary, fontSize: 12.5, marginTop: 2 },
+  streakBannerClose: { color: COLORS.textMuted, fontSize: 16, fontWeight: '700' },
   quickBtn: {
     flex: 1, backgroundColor: COLORS.card, borderRadius: RADIUS.md, paddingVertical: 12,
     alignItems: 'center', borderWidth: 1, borderColor: COLORS.border,

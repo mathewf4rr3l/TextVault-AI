@@ -5,6 +5,7 @@ import { COLORS } from '../../constants/theme';
 const ICONS: Record<string, string> = {
   discover: '✨',
   browse: '🗂️',
+  collections: '⭐',
   search: '🔍',
   library: '📚',
   profile: '⚔️',
@@ -37,6 +38,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="discover" options={{ title: 'Discover' }} />
       <Tabs.Screen name="browse" options={{ title: 'Browse' }} />
+      <Tabs.Screen name="collections" options={{ title: 'Packs' }} />
       <Tabs.Screen name="search" options={{ title: 'Search' }} />
       <Tabs.Screen name="library" options={{ title: 'Library' }} />
       <Tabs.Screen name="profile" options={{ title: 'Profile' }} />

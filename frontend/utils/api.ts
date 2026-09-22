@@ -31,6 +31,9 @@ export interface Prompt {
   likes: number;
   shares: number;
   copies?: number;
+  avg_rating?: number;
+  rating_count?: number;
+  my_rating?: number;
   is_liked?: boolean;
   created_at: string;
   updated_at: string;
@@ -108,6 +111,21 @@ export interface LeaderboardEntry {
   rank: RankInfo;
 }
 
+export interface Review {
+  author_name: string;
+  stars: number;
+  review: string;
+  created_at: string;
+}
+
+export interface StreakStatus {
+  copy_streak: number;
+  longest_streak: number;
+  copied_today: boolean;
+  at_risk: boolean;
+  badge: { emoji: string; label: string };
+}
+
 export interface Profile {
   user: UserType;
   stats: ProfileStats;
@@ -122,7 +140,7 @@ export interface PromptFilters {
   content_type?: string;
   use_case?: string;
   q?: string;
-  sort?: 'trending' | 'newest' | 'top';
+  sort?: 'trending' | 'newest' | 'top' | 'top_rated';
   limit?: number;
   skip?: number;
 }
@@ -196,6 +214,11 @@ export const api = {
   copyPrompt: (id: string) =>
     call<{ copies: number; streak: number; points_awarded: number; badge: { emoji: string; label: string } }>(
       `/api/prompts/${id}/copy`, { method: 'POST' }),
+  ratePrompt: (id: string, stars: number, review?: string) =>
+    call<{ avg_rating: number; rating_count: number; my_rating: number }>(
+      `/api/prompts/${id}/rate`, { method: 'POST', body: JSON.stringify({ stars, review }) }),
+  getReviews: (id: string) => call<Review[]>(`/api/prompts/${id}/reviews`),
+  getStreak: () => call<StreakStatus>('/api/streak'),
 
   // Collections
   getCollections: () => call<CollectionPreview[]>('/api/collections'),

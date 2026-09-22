@@ -37,7 +37,9 @@ export default function PromptCard({ prompt, onPress, onToggleLike, categoryEmoj
       <View style={styles.metaRow}>
         <View style={styles.metaLeft}>
           <DifficultyBadge level={prompt.difficulty} />
-          {prompt.content_type ? (
+          {(prompt.rating_count ?? 0) > 0 ? (
+            <Text style={styles.ratingText}>⭐ {(prompt.avg_rating ?? 0).toFixed(1)}</Text>
+          ) : prompt.content_type ? (
             <Text style={styles.typeText}>{TYPE_EMOJI[prompt.content_type] || '📝'} {prompt.content_type}</Text>
           ) : null}
         </View>
@@ -96,6 +98,7 @@ const styles = StyleSheet.create({
   },
   metaLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   typeText: { color: COLORS.textMuted, fontSize: 12, fontWeight: '600' },
+  ratingText: { color: COLORS.gold, fontSize: 12.5, fontWeight: '700' },
   stats: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   likeBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   heart: { fontSize: 15 },

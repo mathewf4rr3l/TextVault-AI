@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { COLORS, SPACING } from '../constants/theme';
 import { useApp } from '../context/AppContext';
@@ -27,6 +27,7 @@ export default function Index() {
 
   return (
     <View style={styles.container}>
+      <Image source={require('../assets/images/logo-mark.png')} style={styles.logoImg} resizeMode="contain" />
       <Text style={styles.logo}>PromptVeer</Text>
       <Text style={styles.tagline}>The AI prompt arena ⚔️</Text>
       <ActivityIndicator color={COLORS.gold} size="large" style={{ marginTop: SPACING.lg }} />
@@ -41,6 +42,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  logoImg: { width: 140, height: 140, marginBottom: 8 },
   logo: { fontSize: 34, fontWeight: '900', color: COLORS.white, letterSpacing: -0.5 },
   tagline: { fontSize: 15, color: COLORS.purpleLight, marginTop: 6 },
 });
