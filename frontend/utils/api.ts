@@ -1,6 +1,5 @@
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
-// Module-level auth token
 let _authToken: string | null = null;
 
 export function setAuthToken(token: string | null) {
@@ -12,44 +11,94 @@ export interface UserType {
   email: string;
   name: string;
   picture?: string;
+  is_guest?: boolean;
   created_at?: string;
 }
 
-export interface VaultEntry {
+export interface Prompt {
   id: string;
+  title: string;
   content: string;
   category: string;
-  tags: string[];
-  confidence: number;
-  metadata: Record<string, any>;
-  summary?: string;
-  is_favorite: boolean;
-  is_archived: boolean;
+  subcategory?: string;
+  tool?: string;
+  industry?: string;
+  difficulty?: string;
+  use_case?: string;
+  content_type?: string;
+  author_id: string;
+  author_name: string;
+  likes: number;
+  shares: number;
+  is_liked?: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export interface Classification {
-  category: string;
-  tags: string[];
-  confidence: number;
-  metadata: Record<string, any>;
-  summary?: string;
+export interface RankInfo {
+  level: number;
+  name: string;
+  medal: string;
+  color: string;
+  title?: string;
+  min_score?: number;
+}
+
+export interface Category {
+  name: string;
+  emoji: string;
+  subcategories: string[];
+}
+
+export interface Taxonomy {
+  categories: Category[];
+  tools: string[];
+  industries: string[];
+  difficulties: string[];
+  content_types: string[];
+  ranks: RankInfo[];
+}
+
+export interface ProfileStats {
+  prompts_uploaded: number;
+  likes_received: number;
+  shares_received: number;
+  score: number;
+  rank: RankInfo;
+  next_rank: RankInfo | null;
+  progress: number;
+  points_to_next: number;
+}
+
+export interface Profile {
+  user: UserType;
+  stats: ProfileStats;
+}
+
+export interface PromptFilters {
+  category?: string;
+  subcategory?: string;
+  tool?: string;
+  industry?: string;
+  difficulty?: string;
+  content_type?: string;
+  use_case?: string;
+  q?: string;
+  sort?: 'trending' | 'newest' | 'top';
+  limit?: number;
+  skip?: number;
 }
 
 async function call<T>(path: string, opts?: RequestInit): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
+  const timeout = setTimeout(() => controller.abort(), 12000);
   const defaultHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (_authToken) {
-    defaultHeaders['Authorization'] = `Bearer ${_authToken}`;
-  }
+  if (_authToken) defaultHeaders['Authorization'] = `Bearer ${_authToken}`;
   try {
     const res = await fetch(`${BASE}${path}`, {
       ...opts,
       signal: controller.signal,
-      headers: { ...defaultHeaders, ...(opts?.headers as Record<string, string> || {}) },
+      headers: { ...defaultHeaders, ...((opts?.headers as Record<string, string>) || {}) },
     });
     clearTimeout(timeout);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -60,6 +109,17 @@ async function call<T>(path: string, opts?: RequestInit): Promise<T> {
   }
 }
 
+function buildQuery(params?: Record<string, any>): string {
+  const q = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '' && v !== 'All') q.append(k, String(v));
+    });
+  }
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
 export const api = {
   // Auth
   exchangeSession: (sessionId: string) =>
@@ -67,86 +127,42 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId }),
     }),
-
   createGuestSession: (deviceId: string) =>
     call<{ session_token: string; user: UserType }>('/api/auth/guest', {
       method: 'POST',
       body: JSON.stringify({ device_id: deviceId }),
     }),
-
   getMe: () => call<UserType>('/api/auth/me'),
+  logoutUser: () => call<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
 
-  logoutUser: () =>
-    call<{ success: boolean }>('/api/auth/logout', { method: 'POST' }),
+  // Meta
+  getTaxonomy: () => call<Taxonomy>('/api/taxonomy'),
 
-  // Vault entries
-  getEntries: (params?: { category?: string; archived?: boolean; favorites?: boolean }) => {
-    const q = new URLSearchParams();
-    if (params?.category && params.category !== 'All') q.append('category', params.category);
-    if (params?.archived) q.append('archived', 'true');
-    if (params?.favorites) q.append('favorites', 'true');
-    return call<VaultEntry[]>(`/api/entries?${q}`);
-  },
+  // Prompts
+  listPrompts: (filters?: PromptFilters) =>
+    call<Prompt[]>(`/api/prompts${buildQuery(filters as any)}`),
+  discover: () =>
+    call<{ trending: Prompt[]; newest: Prompt[]; top: Prompt[]; categories: { name: string; emoji: string; count: number }[] }>(
+      '/api/discover'),
+  getPrompt: (id: string) => call<Prompt>(`/api/prompts/${id}`),
+  createPrompt: (body: Partial<Prompt>) =>
+    call<Prompt>('/api/prompts', { method: 'POST', body: JSON.stringify(body) }),
+  updatePrompt: (id: string, body: Partial<Prompt>) =>
+    call<Prompt>(`/api/prompts/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deletePrompt: (id: string) =>
+    call<{ success: boolean }>(`/api/prompts/${id}`, { method: 'DELETE' }),
+  likePrompt: (id: string) =>
+    call<{ is_liked: boolean; likes: number }>(`/api/prompts/${id}/like`, { method: 'POST' }),
+  sharePrompt: (id: string) =>
+    call<{ shares: number }>(`/api/prompts/${id}/share`, { method: 'POST' }),
 
-  getEntry: (id: string) => call<VaultEntry>(`/api/entries/${id}`),
-
-  createEntry: (content: string, category?: string, tags?: string[]) =>
-    call<VaultEntry>('/api/entries', {
-      method: 'POST',
-      body: JSON.stringify({ content, category, tags }),
-    }),
-
-  updateEntry: (id: string, data: Partial<VaultEntry>) =>
-    call<VaultEntry>(`/api/entries/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }),
-
-  deleteEntry: (id: string) =>
-    call<{ success: boolean }>(`/api/entries/${id}`, { method: 'DELETE' }),
-
-  searchEntries: (query: string, category?: string) =>
-    call<VaultEntry[]>('/api/entries/search', {
-      method: 'POST',
-      body: JSON.stringify({ query, category }),
-    }),
-
-  classifyText: (content: string) =>
-    call<Classification>('/api/ai/classify', {
-      method: 'POST',
-      body: JSON.stringify({ content }),
-    }),
-
-  summarize: (content: string) =>
-    call<{ summary: string }>('/api/ai/summarize', {
-      method: 'POST',
-      body: JSON.stringify({ content }),
-    }),
-
-  getCategoryStats: () =>
-    call<{ category: string; count: number }[]>('/api/categories/stats'),
-
-  getStats: () => call<{ total: number; favorites: number }>('/api/stats'),
-
-  // PIN (all require auth token now)
-  setupPin: (pin: string) =>
-    call<{ success: boolean; message: string }>('/api/pin/setup', {
-      method: 'POST',
-      body: JSON.stringify({ pin }),
-    }),
-
-  verifyPin: (pin: string) =>
-    call<{ success: boolean; message: string }>('/api/pin/verify', {
-      method: 'POST',
-      body: JSON.stringify({ pin }),
-    }),
-
-  getPinStatus: () => call<{ hasPin: boolean }>('/api/pin/status'),
-
-  resetPin: () => call<{ success: boolean }>('/api/pin/reset', { method: 'DELETE' }),
-
-  exportEntries: (format: string) =>
-    call<{ data: any; format: string; count: number }>(`/api/export?format=${format}`),
+  // Library / profile
+  getLibrary: (type: 'uploads' | 'liked') =>
+    call<Prompt[]>(`/api/library?type=${type}`),
+  getProfile: () => call<Profile>('/api/profile'),
+  getLeaderboard: () =>
+    call<{ user_id: string; name: string; picture: string; score: number; prompts_uploaded: number; rank: RankInfo }[]>(
+      '/api/leaderboard'),
 };
 
 export function timeAgo(dateStr: string): string {
@@ -162,4 +178,10 @@ export function timeAgo(dateStr: string): string {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+export function formatCount(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }

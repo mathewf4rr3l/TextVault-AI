@@ -1,60 +1,35 @@
 import { useEffect, useRef } from 'react';
-import { View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 import { useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
-import { COLORS } from '../constants/theme';
+import { COLORS, SPACING } from '../constants/theme';
 import { useApp } from '../context/AppContext';
 
 export default function Index() {
   const router = useRouter();
-  const { isAuthLoading, sessionToken } = useApp();
+  const { isAuthLoading, sessionToken, ensureSession } = useApp();
   const navigated = useRef(false);
 
   useEffect(() => {
     if (isAuthLoading) return;
     if (navigated.current) return;
+    navigated.current = true;
 
-    const doNavigate = async () => {
-      if (navigated.current) return;
-      navigated.current = true;
-
-      if (!sessionToken) {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.href = '/auth';
-        } else {
-          router.replace('/auth' as any);
-        }
-        return;
-      }
-
+    const go = async () => {
       try {
-        let pin: string | null = null;
-        if (Platform.OS !== 'web') {
-          pin = await SecureStore.getItemAsync('vault_pin');
-        } else if (typeof window !== 'undefined') {
-          pin = localStorage.getItem('vault_pin');
-        }
-        const dest = pin ? '/lock' : '/setup-pin';
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.href = dest;
-        } else {
-          router.replace(dest as any);
-        }
+        if (!sessionToken) await ensureSession();
       } catch {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.location.href = '/setup-pin';
-        } else {
-          router.replace('/setup-pin' as any);
-        }
+        // Even if guest session fails, marketplace is browsable (public GET)
       }
+      router.replace('/(tabs)/discover' as any);
     };
-
-    doNavigate();
+    go();
   }, [isAuthLoading, sessionToken]);
 
   return (
     <View style={styles.container}>
-      <ActivityIndicator color={COLORS.gold} size="large" />
+      <Text style={styles.logo}>PromptVeer</Text>
+      <Text style={styles.tagline}>The AI prompt arena ⚔️</Text>
+      <ActivityIndicator color={COLORS.gold} size="large" style={{ marginTop: SPACING.lg }} />
     </View>
   );
 }
@@ -66,4 +41,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  logo: { fontSize: 34, fontWeight: '900', color: COLORS.white, letterSpacing: -0.5 },
+  tagline: { fontSize: 15, color: COLORS.purpleLight, marginTop: 6 },
 });

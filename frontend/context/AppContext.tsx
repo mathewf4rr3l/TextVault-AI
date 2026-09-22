@@ -1,18 +1,16 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { AppState, Platform } from 'react-native';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { api, UserType, setAuthToken } from '../utils/api';
 
 interface AppContextType {
-  // Auth
   user: UserType | null;
   sessionToken: string | null;
   isAuthLoading: boolean;
   login: (token: string, user: UserType) => Promise<void>;
   logout: () => Promise<void>;
-  // Vault lock
-  isUnlocked: boolean;
-  setUnlocked: (val: boolean) => void;
+  ensureSession: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AppCtx = createContext<AppContextType>({
@@ -21,11 +19,12 @@ const AppCtx = createContext<AppContextType>({
   isAuthLoading: true,
   login: async () => {},
   logout: async () => {},
-  isUnlocked: false,
-  setUnlocked: () => {},
+  ensureSession: async () => {},
+  refreshUser: async () => {},
 });
 
-const TOKEN_KEY = 'textvault_session_token';
+const TOKEN_KEY = 'promptveer_session_token';
+const DEVICE_KEY = 'promptveer_device_id';
 
 async function storeToken(token: string) {
   if (Platform.OS === 'web') {
@@ -51,102 +50,79 @@ async function removeStoredToken() {
   }
 }
 
+async function getOrCreateDeviceId(): Promise<string> {
+  try {
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined') return 'web_' + Date.now();
+      const stored = localStorage.getItem(DEVICE_KEY);
+      if (stored) return stored;
+      const id = 'web_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+      localStorage.setItem(DEVICE_KEY, id);
+      return id;
+    }
+    const stored = await SecureStore.getItemAsync(DEVICE_KEY);
+    if (stored) return stored;
+    const id = 'dev_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+    await SecureStore.setItemAsync(DEVICE_KEY, id);
+    return id;
+  } catch {
+    return 'fallback_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
+  }
+}
+
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserType | null>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const [isUnlocked, setUnlocked] = useState(false);
-  const appStateRef = useRef(AppState.currentState);
-  const processedSessionIds = useRef(new Set<string>());
 
-  // Lock on background
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (nextState) => {
-      if (appStateRef.current === 'active' && nextState.match(/inactive|background/)) {
-        setUnlocked(false);
-      }
-      appStateRef.current = nextState;
-    });
-    return () => sub.remove();
-  }, []);
-
-  // Init auth on mount
   useEffect(() => {
     let mounted = true;
-
     const initAuth = async () => {
       setIsAuthLoading(true);
       try {
-        // WEB ONLY: Check for session_id in URL FIRST
+        // WEB ONLY: handle Google OAuth redirect (session_id in URL)
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           const hash = window.location.hash || '';
           const search = window.location.search || '';
           const combined = hash + (search.length > 1 ? '&' + search.slice(1) : '');
           const match = combined.match(/[#?&]session_id=([^&#]+)/);
-
           if (match) {
             const sessionId = decodeURIComponent(match[1]);
-            if (!processedSessionIds.current.has(sessionId)) {
-              processedSessionIds.current.add(sessionId);
+            try {
               const data = await api.exchangeSession(sessionId);
               if (!mounted) return;
               await storeToken(data.session_token);
               setAuthToken(data.session_token);
               setUser(data.user);
               setSessionToken(data.session_token);
-              // Clean URL after successful exchange
               window.history.replaceState(window.history.state, '', window.location.pathname);
               setIsAuthLoading(false);
               return;
-            }
+            } catch { /* fall through */ }
           }
         }
 
-        // Check for existing stored token
         const token = await getStoredToken();
         if (token && mounted) {
           setAuthToken(token);
           try {
-            const me = await api.getMe(); // has 10s timeout via AbortController
-            if (mounted) {
-              setUser(me);
-              setSessionToken(token);
-            }
+            const me = await api.getMe();
+            if (mounted) { setUser(me); setSessionToken(token); }
           } catch {
-            // Token expired or invalid — clear it
             await removeStoredToken();
-            if (mounted) {
-              setAuthToken(null);
-              setUser(null);
-              setSessionToken(null);
-            }
+            if (mounted) { setAuthToken(null); setUser(null); setSessionToken(null); }
           }
         }
       } catch {
-        await removeStoredToken();
-        if (mounted) {
-          setAuthToken(null);
-          setUser(null);
-          setSessionToken(null);
-        }
+        if (mounted) { setAuthToken(null); setUser(null); setSessionToken(null); }
       } finally {
-        if (mounted) {
-          setIsAuthLoading(false);
-        }
+        if (mounted) setIsAuthLoading(false);
       }
     };
 
-    // Safety net: ensure isAuthLoading resolves within 8 seconds no matter what
-    const safetyTimer = setTimeout(() => {
-      if (mounted) setIsAuthLoading(false);
-    }, 8000);
-
+    const safetyTimer = setTimeout(() => { if (mounted) setIsAuthLoading(false); }, 8000);
     initAuth().finally(() => clearTimeout(safetyTimer));
-
-    return () => {
-      mounted = false;
-      clearTimeout(safetyTimer);
-    };
+    return () => { mounted = false; clearTimeout(safetyTimer); };
   }, []);
 
   const login = async (token: string, userObj: UserType) => {
@@ -156,26 +132,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSessionToken(token);
   };
 
+  const ensureSession = async () => {
+    if (sessionToken) return;
+    const deviceId = await getOrCreateDeviceId();
+    const data = await api.createGuestSession(deviceId);
+    await storeToken(data.session_token);
+    setAuthToken(data.session_token);
+    setUser(data.user);
+    setSessionToken(data.session_token);
+  };
+
+  const refreshUser = async () => {
+    try {
+      const me = await api.getMe();
+      setUser(me);
+    } catch {}
+  };
+
   const logout = async () => {
     try { await api.logoutUser(); } catch {}
     await removeStoredToken();
-    // Clear guest device ID — prevents re-minting the same guest session after logout
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      try { localStorage.removeItem('textvault_device_id'); } catch {}
+      try { localStorage.removeItem(DEVICE_KEY); } catch {}
     } else {
-      try { await SecureStore.deleteItemAsync('textvault_device_id'); } catch {}
+      try { await SecureStore.deleteItemAsync(DEVICE_KEY); } catch {}
     }
     setAuthToken(null);
     setUser(null);
     setSessionToken(null);
-    setUnlocked(false);
   };
 
   return (
-    <AppCtx.Provider value={{
-      user, sessionToken, isAuthLoading, login, logout,
-      isUnlocked, setUnlocked,
-    }}>
+    <AppCtx.Provider value={{ user, sessionToken, isAuthLoading, login, logout, ensureSession, refreshUser }}>
       {children}
     </AppCtx.Provider>
   );
